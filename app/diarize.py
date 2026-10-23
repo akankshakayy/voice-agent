@@ -16,14 +16,13 @@ import bisect
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tarfile
 import threading
 import urllib.request
 
-from . import db
+from . import db, stt
 
 log = logging.getLogger("eko.diarize")
 # How many voices to look for: 0 = let the model decide (a shop customer or a third person can join a call)
@@ -59,7 +58,7 @@ def available() -> bool:
         import sherpa_onnx  # noqa: F401
     except ImportError:
         return False
-    return all(os.path.exists(p) for p in _paths()) and bool(shutil.which("ffmpeg"))
+    return all(os.path.exists(p) for p in _paths()) and bool(stt.ffmpeg())
 
 
 def download():
@@ -98,7 +97,7 @@ def _get_engine():
 def _load(path: str):
     """Any audio file -> 16 kHz mono float32 samples, via ffmpeg (reads the file itself, so phone .m4a works)."""
     import numpy as np
-    out = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path, "-ac", "1", "-ar", str(SAMPLE_RATE),
+    out = subprocess.run([stt.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", path, "-ac", "1", "-ar", str(SAMPLE_RATE),
                           "-f", "f32le", "pipe:1"], capture_output=True, timeout=600)
     if out.returncode != 0:
         raise ValueError(f"Couldn't read this audio file: {out.stderr.decode(errors='replace')[:200]}")

@@ -19,14 +19,26 @@ def available() -> bool:
 SUPPORTED = {"flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "opus", "wav", "webm"}
 
 
+def ffmpeg() -> str | None:
+    """ffmpeg on the PATH, else the copy that comes with the imageio-ffmpeg package (no system install needed)."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except (ImportError, RuntimeError):
+        return None
+
+
 def to_supported(audio: bytes, filename: str) -> tuple[bytes, str]:
     """Convert audio Whisper can't take into 16 kHz mono FLAC with ffmpeg (lossless, small)."""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext in SUPPORTED:
         return audio, filename
-    if not shutil.which("ffmpeg"):
+    if not ffmpeg():
         raise ValueError(f"Can't transcribe .{ext or '?'} audio without ffmpeg installed")
-    out = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-ac", "1", "-ar", "16000",
+    out = subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-ac", "1", "-ar", "16000",
                           "-f", "flac", "pipe:1"], input=audio, capture_output=True, timeout=120)
     if out.returncode != 0 or not out.stdout:
         raise ValueError(f"Couldn't read this audio file: {out.stderr.decode(errors='replace')[:200]}")

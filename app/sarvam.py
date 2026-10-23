@@ -14,6 +14,8 @@ import subprocess
 import tempfile
 import time
 
+from . import stt
+
 API = "https://api.sarvam.ai/speech-to-text/job/v1"
 MODEL = os.environ.get("SARVAM_STT_MODEL", "saaras:v4")
 MODE = os.environ.get("SARVAM_STT_MODE", "codemix")
@@ -49,10 +51,10 @@ def _check(r, what: str):
 
 def _as_mp3(path: str) -> str:
     """Phone and WhatsApp formats vary; a 16 kHz mono MP3 is small to upload and always accepted."""
-    if not shutil.which("ffmpeg"):
+    if not stt.ffmpeg():
         return path
     out = os.path.join(tempfile.mkdtemp(prefix="sarvam-"), "call.mp3")
-    done = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", path, "-ac", "1", "-ar", "16000",
+    done = subprocess.run([stt.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", path, "-ac", "1", "-ar", "16000",
                            "-b:a", "48k", out], capture_output=True, timeout=600)
     if done.returncode != 0:
         raise ValueError(f"Couldn't read this audio file: {done.stderr.decode(errors='replace')[:200]}")

@@ -366,10 +366,10 @@ def review_call(segs: list[dict]) -> tuple[dict, str]:
 def _compact(path: str) -> tuple[bytes, str]:
     """Any phone format -> 16 kHz mono Opus, so a long call stays under Whisper's 25 MB limit.
     Reads the file itself, not a pipe: phone .m4a files often keep their index at the end."""
-    if not shutil.which("ffmpeg"):
+    if not stt.ffmpeg():
         with open(path, "rb") as f:
             return f.read(), os.path.basename(path)
-    out = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path, "-ac", "1", "-ar", "16000",
+    out = subprocess.run([stt.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", path, "-ac", "1", "-ar", "16000",
                           "-c:a", "libopus", "-b:a", "24k", "-f", "ogg", "pipe:1"], capture_output=True, timeout=600)
     if out.returncode != 0 or not out.stdout:
         raise ValueError(f"Couldn't read this audio file: {out.stderr.decode(errors='replace')[:200]}")
@@ -677,7 +677,7 @@ def export_candidates(out_csv: str | None = None, audio_dir: str | None = None, 
     if os.path.exists(out_csv):
         with open(out_csv, newline="", encoding="utf-8") as f:
             have |= {row["id"] for row in csv.DictReader(f)}
-    if not shutil.which("ffmpeg"):
+    if not stt.ffmpeg():
         raise RuntimeError("Cutting clips needs ffmpeg")
     os.makedirs(audio_dir, exist_ok=True)
     new_rows = []
@@ -692,7 +692,7 @@ def export_candidates(out_csv: str | None = None, audio_dir: str | None = None, 
         while j < len(segs) and segs[j].get("speaker") == "csp" and segs[j]["end"] - segs[i]["start"] <= max_clip_s:
             end, j = segs[j]["end"], j + 1
         clip = f"{case_id}.ogg"
-        cut = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        cut = subprocess.run([stt.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
                               "-ss", f"{max(segs[i]['start'] - 0.2, 0):.2f}", "-to", f"{end + 0.3:.2f}",
                               "-i", os.path.join(storage_dir(), r["file_path"]), "-ac", "1", "-ar", "16000",
                               "-c:a", "libopus", "-b:a", "32k", os.path.join(audio_dir, clip)],
