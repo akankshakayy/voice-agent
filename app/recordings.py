@@ -22,6 +22,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import logging
 import os
 import re
@@ -31,10 +32,11 @@ import sqlite3
 import subprocess
 import threading
 import time
-from datetime import datetime
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import db, diarize, integrations, llm_engine, report, sarvam, stt, telemetry
+from . import db, diarize, integrations, llm_engine, misheard, report, sarvam, stt, telemetry
 from .taxonomy import CATEGORIES, SLOT_LABELS
 
 log = logging.getLogger("eko.recordings")
@@ -206,24 +208,38 @@ def delete_recording(rec_id: int) -> bool:
 
 
 # ---------------------------------------------------------------- a person's corrections
+CHECKS = ("transcript", "issue")
+
+
 def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary: str | None = None,
-               report_md: str | None = None) -> dict:
+               report_md: str | None = None, intent: str | None = None, slots: dict | None = None,
+               checked=()) -> dict:
     """A person fixes what speech-to-text or the LLM got wrong.
 
     lines: every line to keep, in order, as {"i": its index in the transcript now, "text", "speaker", "voice"}.
-    A line left out is removed (e.g. Whisper made it up from silence); times stay as they were. A line whose
-    text changes keeps the machine's first version in "heard", so a corrected line pairs what was heard with what
-    was said: a scorecard reference (export_candidates) and a misheard-word example. Every change is also logged
-    in corrections (source 'recording'). Fixed text is masked again, so a personal number can't be typed back in."""
-    r = db.q("SELECT status, transcript_json, issue_segment, summary, report_md, agent_summary, agent_report_md "
-             "FROM recordings WHERE id=?", (rec_id,), one=True)
+    A line left out is removed (e.g. Whisper made it up from silence) and kept in removed_json; times stay as they
+    were. A line whose text changes keeps the machine's first version in "heard", so a corrected line pairs what
+    was heard with what was said: a scorecard reference (export_candidates) and a misheard-word example
+    (app/misheard.py). intent and slots fix the issue type and details; the machine's are kept in agent_*.
+    Every change is logged in corrections (source 'recording'). Fixed text is masked again, so a personal number
+    can't be typed back in.
+
+    Saving lines means the whole transcript was checked, and so does checked=["transcript"] ("checked, no
+    changes"): a checked transcript gets its word error rate and can serve as a scorecard reference. Saving the
+    issue, or checked=["issue"], marks the issue type and details as checked."""
+    r = db.q("""SELECT status, transcript_json, removed_json, issue_segment, summary, report_md, intent, slots_json,
+                agent_summary, agent_report_md, agent_intent FROM recordings WHERE id=?""", (rec_id,), one=True)
     if not r:
         raise LookupError("Recording not found")
     if r["status"] != "done":
         raise ValueError("Wait until the recording is processed before correcting it")
+    if set(checked) - set(CHECKS):
+        raise ValueError("Only the transcript or the issue can be marked as checked")
+    now, checked = time.time(), set(checked)
     fields, log_ = {}, []
+    transcript, removed = json.loads(r["transcript_json"] or "[]"), json.loads(r["removed_json"] or "[]")
     if lines is not None:
-        old = json.loads(r["transcript_json"] or "[]")
+        old = transcript
         idx = [l.get("i") for l in lines]
         if any(not isinstance(i, int) or not 0 <= i < len(old) for i in idx) or idx != sorted(set(idx)):
             raise ValueError("The transcript changed while you were editing it. Open it again")
@@ -245,11 +261,16 @@ def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary
                 log_.append(("speaker", f"{o.get('voice') or ''} {o.get('speaker')}".strip(),
                              f"{line.get('voice') or ''} {line.get('speaker')}".strip()))
             new.append(line)
-        log_ += [("transcript", old[i]["text"], "") for i in sorted(set(range(len(old))) - set(idx))]
+        gone = [old[i] for i in sorted(set(range(len(old))) - set(idx))]
+        log_ += [("transcript", l["text"], "") for l in gone]
         if new != old:
             issue = r["issue_segment"]
-            fields.update(transcript_json=new, transcript_edited_at=time.time(),
+            transcript, removed = new, removed + gone
+            fields.update(transcript_json=new, transcript_edited_at=now,
                           issue_segment=idx.index(issue) if issue is not None and issue in idx else -1)
+            if gone:
+                fields["removed_json"] = removed
+        checked.add("transcript")
     for col, agent_col, value in (("summary", "agent_summary", summary), ("report_md", "agent_report_md", report_md)):
         if value is None:
             continue
@@ -259,11 +280,37 @@ def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary
             if r[agent_col] is None:
                 fields[agent_col] = r[col] or ""      # the machine's version, kept once
             log_.append(("summary" if col == "summary" else "report", r[col], value))
+    if intent is not None or slots is not None:
+        old_slots = json.loads(r["slots_json"] or "{}")
+        new_intent = r["intent"] if intent is None else intent
+        if new_intent not in llm_engine.INTENTS:
+            raise ValueError("Unknown issue type")
+        new_slots = old_slots if slots is None else {
+            k: llm_engine.normalize_id(v) if k in llm_engine.ID_SLOTS else v
+            for k, v in ((k, mask(" ".join(str(v or "").split()))) for k, v in slots.items() if k in SLOT_LABELS) if v}
+        if new_intent != r["intent"]:
+            log_.append(("category", r["intent"], new_intent))
+        log_ += [(f"detail:{k}", old_slots.get(k), new_slots.get(k)) for k in sorted({*old_slots, *new_slots})
+                 if old_slots.get(k) != new_slots.get(k)]
+        if new_intent != r["intent"] or new_slots != old_slots:
+            fields.update(intent=new_intent, slots_json=new_slots)
+            if r["agent_intent"] is None:
+                fields.update(agent_intent=r["intent"] or "unknown", agent_slots_json=old_slots)
+        checked.add("issue")
+    if "transcript" in checked:
+        errors, words = misheard.word_errors(transcript, removed)
+        fields.update(checked_at=now, checked_by=actor, stt_errors=errors, stt_words=words)
+    if "issue" in checked:
+        fields.update(issue_checked_at=now, issue_checked_by=actor)
     if not fields:
         return {"changed": 0}
-    db.update("recordings", rec_id, **fields, edited_at=time.time(), edited_by=actor)
+    if log_:
+        fields.update(edited_at=now, edited_by=actor)
+    db.update("recordings", rec_id, **fields)
     for field, before, after in log_:
         telemetry.record_correction("recording", rec_id, field, before, after, actor)
+    if "transcript_json" in fields:
+        misheard.forget()
     return {"changed": len(log_)}
 
 
@@ -404,7 +451,8 @@ def _ask(system: str, user: str, tool: dict) -> tuple[dict, str]:
 
 
 def review_call(segs: list[dict]) -> tuple[dict, str]:
-    out, model = _ask(_review_prompt(), _review_input(segs), REVIEW_TOOL)
+    hint = misheard.hint()
+    out, model = _ask(_review_prompt() + (f"\n\n{hint}" if hint else ""), _review_input(segs), REVIEW_TOOL)
     speakers = [s if s in SPEAKERS else "unknown" for s in (out.get("speakers") or [])]
     speakers = (speakers + ["unknown"] * len(segs))[:len(segs)]
     roles = {v: r for v, r in (out.get("voice_roles") or {}).items() if r in SPEAKERS}
@@ -545,11 +593,20 @@ def _transcribe(r: dict, path: str) -> dict:
     return cache
 
 
+def stt_confidence(cache: dict) -> float | None:
+    """How sure Whisper was of the whole call: its per-segment probability, weighted by length (0-1). None when
+    the transcript came without one (Sarvam, or transcribed before this was kept). Used to put the least sure
+    calls first in the queue of calls to check."""
+    segs = [s for s in cache.get("segments") or [] if s.get("avg_logprob") is not None]
+    weight = [max(s["end"] - s["start"], 0.1) for s in segs]
+    return round(sum(math.exp(s["avg_logprob"]) * w for s, w in zip(segs, weight)) / sum(weight), 3) if segs else None
+
+
 def process_one(r: dict):
     started, t0 = time.time(), time.perf_counter()
     path = os.path.join(storage_dir(), r["file_path"])
-    # A transcript a person corrected is reviewed as it stands: transcribing again would throw their fixes away
-    corrected = json.loads(r["transcript_json"] or "[]") if r.get("transcript_edited_at") else None
+    # A transcript a person corrected or checked is reviewed as it stands: transcribing again would undo their work
+    corrected = json.loads(r["transcript_json"] or "[]") if r.get("transcript_edited_at") or r.get("checked_at") else None
     cache = _transcribe(r, path) if corrected is None else json.loads(r.get("stt_json") or "null") or {}
     fresh_stt = cache.get("transcribe_at", 0) >= started
     t1 = time.perf_counter()
@@ -564,8 +621,10 @@ def process_one(r: dict):
                 "lines_s": round(t2 - t1, 1), "review_s": round(review_s, 1), "total_s": round(time.perf_counter() - t0, 1),
                 "stt": cache.get("stt")}
 
+    # A new review replaces what a person fixed in the old one (their fixes stay in corrections)
     fields = {"status": "done", "processed_at": time.time(), "attempts": r["attempts"] + 1, "error": None,
-              "agent_summary": None}
+              "agent_summary": None, "agent_intent": None, "agent_slots_json": None, "issue_checked_at": None,
+              "issue_checked_by": None, "stt_confidence": stt_confidence(cache)}
     if not segs:
         db.update("recordings", r["id"], **fields, is_csp_call=0, transcript_json=[], timing_json=timing(),
                   summary="No speech in the recording")
@@ -695,7 +754,10 @@ def processing_loop(stop: threading.Event):
 # ---------------------------------------------------------------- reading results
 LIST_COLS = """r.id, r.rm_id, m.name AS rm_name, r.csp_id, c.name AS csp_name, c.csp_code, r.other_number, r.started_at,
                r.duration_sec, r.direction, r.uploaded_at, r.status, r.error, r.attempts, r.is_csp_call, r.language,
-               r.intent, r.sentiment, r.resolution, r.summary, r.orig_name,
+               r.intent, r.sentiment, r.resolution, r.summary, r.orig_name, r.intent_confidence, r.stt_confidence,
+               r.checked_at, r.issue_checked_at, r.stt_words,
+               CASE WHEN r.transcript_json IS NOT NULL AND r.transcript_json NOT IN ('', '[]') THEN 1 ELSE 0 END AS has_transcript,
+               CASE WHEN r.stt_words > 0 THEN ROUND(1.0 * r.stt_errors / r.stt_words, 4) END AS stt_wer,
                CASE WHEN r.token_id IS NULL THEN 'manual' ELSE 'phone' END AS source"""
 
 
@@ -713,7 +775,8 @@ def list_recordings(status: str | None = None, rm_id: int | None = None, limit: 
 
 
 def get_recording(rec_id: int) -> dict | None:
-    r = db.q(f"""SELECT {LIST_COLS}, r.transcript_json, r.slots_json, r.issue_segment, r.intent_confidence, r.rm_handling,
+    r = db.q(f"""SELECT {LIST_COLS}, r.transcript_json, r.slots_json, r.issue_segment, r.rm_handling, r.removed_json,
+                 r.agent_intent, r.agent_slots_json, r.checked_by, r.issue_checked_by, r.stt_errors,
                  r.model, r.processed_at, r.next_try_at, r.timing_json, r.report_md, r.report_error, r.report_at,
                  r.report_s, r.report_model, r.agent_summary, r.agent_report_md, r.transcript_edited_at, r.edited_at,
                  r.edited_by FROM recordings r LEFT JOIN rms m ON m.id=r.rm_id
@@ -722,6 +785,8 @@ def get_recording(rec_id: int) -> dict | None:
         r["timing"] = json.loads(r.pop("timing_json") or "null")
         r["transcript"] = json.loads(r.pop("transcript_json") or "[]")
         r["slots"] = json.loads(r.pop("slots_json") or "{}")
+        r["removed"] = json.loads(r.pop("removed_json") or "[]")
+        r["agent_slots"] = json.loads(r.pop("agent_slots_json") or "null")
     return r
 
 
@@ -731,10 +796,52 @@ def summary_counts(rm_id: int | None = None) -> dict:
     return {r["status"]: r["n"] for r in rows}
 
 
+def learning_stats(rm_id: int | None = None) -> dict:
+    """What people's checks say about the machine: speech-to-text word error rate (overall, per speech-to-text
+    setup and per week processed), how often the AI's issue type and details were right, and the misheard words."""
+    where = " AND rm_id=?" if rm_id else ""
+    rows = db.q(f"""SELECT processed_at, timing_json, stt_errors, stt_words, checked_at, issue_checked_at, intent,
+                    slots_json, agent_intent, agent_slots_json FROM recordings
+                    WHERE status='done' AND (checked_at IS NOT NULL OR issue_checked_at IS NOT NULL){where}""",
+                (rm_id,) if rm_id else ())
+    to_check = db.q(f"""SELECT COUNT(*) AS n FROM recordings WHERE status='done' AND checked_at IS NULL
+                        AND COALESCE(is_csp_call, 1)=1 AND transcript_json NOT IN ('', '[]'){where}""",
+                    (rm_id,) if rm_id else (), one=True)["n"]
+
+    def wer(group: list[dict]) -> dict:
+        words = sum(g["stt_words"] or 0 for g in group)
+        errors = sum(g["stt_errors"] or 0 for g in group)
+        return {"calls": len(group), "words": words, "wer": round(errors / words, 4) if words else None}
+
+    checked = [r for r in rows if r["checked_at"]]
+    by_stt, by_week = defaultdict(list), defaultdict(list)
+    for r in checked:
+        by_stt[(json.loads(r["timing_json"] or "null") or {}).get("stt") or "Not recorded"].append(r)
+        day = datetime.fromtimestamp(r["processed_at"] or r["checked_at"], TZ).date()
+        by_week[(day - timedelta(days=day.weekday())).isoformat()].append(r)
+    issues = [r for r in rows if r["issue_checked_at"]]
+    type_right = sum(1 for r in issues if r["agent_intent"] is None or r["agent_intent"] == r["intent"])
+    details_right, fixes = 0, Counter()
+    for r in issues:
+        before = json.loads(r["agent_slots_json"] or "null")
+        after = json.loads(r["slots_json"] or "{}")
+        changed = [k for k in {*after, *(before or {})} if before is not None and before.get(k) != after.get(k)]
+        details_right += not changed
+        fixes.update(changed)
+    pct = lambda n, d: round(100 * n / d, 1) if d else None   # noqa: E731
+    return {"transcripts": {**wer(checked), "to_check": to_check,
+                            "by_stt": sorted(({"stt": k, **wer(v)} for k, v in by_stt.items()), key=lambda x: -x["calls"]),
+                            "by_week": [{"week": k, **wer(by_week[k])} for k in sorted(by_week)]},
+            "issues": {"checked": len(issues), "type_right_pct": pct(type_right, len(issues)),
+                       "details_right_pct": pct(details_right, len(issues)),
+                       "detail_fixes": [{"slot": k, "label": SLOT_LABELS.get(k, k), "count": n} for k, n in fixes.most_common()]},
+            "misheard": misheard.pairs(1, 60, rm_id), "misheard_in_prompts_from": misheard.MIN_COUNT}
+
+
 # ---------------------------------------------------------------- feeding the scorecard
 def export_candidates(out_csv: str | None = None, audio_dir: str | None = None, max_clip_s: float = 25) -> int:
     """Cut the CSP's opening complaint from every finished call into evals/audio/ and add a draft row to
-    evals/candidates.csv. reference_text is left empty unless a person corrected the transcript (Whisper's own text
+    evals/candidates.csv. reference_text is left empty unless a person checked the transcript (Whisper's own text
     would score itself as perfect): someone listens, writes or checks what was really said, then moves the row to
     cases.csv."""
     out_csv = out_csv or os.path.join(ROOT, "evals", "candidates.csv")
@@ -769,14 +876,18 @@ def export_candidates(out_csv: str | None = None, audio_dir: str | None = None, 
             log.warning("Couldn't cut a clip from recording %d: %s", r["id"], cut.stderr[:200])
             continue
         heard = " ".join(s.get("heard", s["text"]) for s in segs[i:j])
-        # A transcript a person corrected already says what was really said: that is the reference
-        said = " ".join(s["text"] for s in segs[i:j]) if r["transcript_edited_at"] else ""
+        # A transcript a person checked already says what was really said: that is the reference
+        said = " ".join(s["text"] for s in segs[i:j]) if r["checked_at"] else ""
+        slots = json.loads(r["slots_json"] or "{}") if r["issue_checked_at"] else {}
         row = dict.fromkeys(cols, "")
+        row.update({k: v for k, v in slots.items() if k in cols and k not in ("id", "notes")})
         row.update(id=case_id, lang="en" if r["language"] == "en" else "hi", audio=clip, reference_text=said,
                    expected_intent=r["intent"] if r["intent"] in CATEGORIES else "",
                    notes=f"DRAFT from recorded call {r['id']}: listen and "
-                         + (f"check reference_text (corrected by {r['edited_by']}), fill " if said else "fill reference_text, ")
-                         + f"expected_action and details. Whisper heard: {heard} | AI review of the whole call: "
+                         + (f"check reference_text (checked by {r['checked_by']}), " if said else "fill reference_text, ")
+                         + ("check the details (checked by " + r["issue_checked_by"] + "), fill expected_action. "
+                            if r["issue_checked_at"] else "fill expected_action and details. ")
+                         + f"Whisper heard: {heard} | AI review of the whole call: "
                          f"{r['summary']} {r['slots_json'] or ''}")
         new_rows.append(row)
     if new_rows:

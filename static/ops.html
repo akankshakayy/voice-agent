@@ -196,7 +196,7 @@ async function openCall(id) {
       <dt>Engine</dt><dd>${esc(c.engine)}</dd>
     </dl>
     <h3 style="margin-top:18px">Transcript & per-turn model data</h3>
-    ${c.turns.map(t => `<div class="bubble ${t.role}">${esc(t.text)}<div class="meta">${[
+    ${c.turns.map(t => `<div class="bubble ${t.role}">${t.role === "csp" && t.stt_confidence != null && t.stt_confidence < .75 ? `<span class="unsure" title="Speech was unclear here">${esc(t.text)}</span>` : esc(t.text)}<div class="meta">${[
       t.stt_confidence != null ? `STT ${Math.round(t.stt_confidence * 100)}%` : "",
       t.intent ? `intent ${esc(t.intent)} ${t.intent_confidence != null ? Math.round(t.intent_confidence * 100) + "%" : ""}` : "",
       t.latency_ms != null ? `${num(t.latency_ms, 1)} ms` : "", t.engine && t.role === "csp" ? esc(t.engine) : "", t.error ? `⚠ ${esc(t.error)}` : ""].filter(Boolean).join(" · ")}</div></div>`).join("")}

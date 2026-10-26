@@ -15,7 +15,7 @@ import zipfile
 from datetime import datetime
 from xml.sax.saxutils import escape as xml_escape
 
-from . import db, llm_engine
+from . import db, llm_engine, misheard
 
 CHUNK_CHARS = 6000          # one part of the transcript per LLM call (fits a Groq free-tier minute)
 # gpt-oss takes 8k tokens a minute on Groq's free tier; qwen only 1k output tokens a minute, too few for notes
@@ -175,7 +175,7 @@ def summarize(rec: dict, sleep=time.sleep, retries: int = 8) -> tuple[str, str]:
                 sleep(min(e.wait, 90))
 
     def part_summary(part, label, depth=0):
-        text, model, cut = call(PART_PROMPT, f"{label} of the transcript:\n\n{part}", 2600)
+        text, model, cut = call(PART_PROMPT + (f"\n\n{hint}" if hint else ""), f"{label} of the transcript:\n\n{part}", 2600)
         lines = part.splitlines()
         if cut and depth < 2 and len(lines) > 1:
             half = len(lines) // 2
@@ -184,6 +184,7 @@ def summarize(rec: dict, sleep=time.sleep, retries: int = 8) -> tuple[str, str]:
             return a[0] + "\n\n" + b[0], a[1] + "\n" + b[1], b[2]
         return (*_blocks(text), model)
 
+    hint = misheard.hint()
     text = transcript_text(rec)
     if not text.strip():
         return "## In short\nNo speech was found in this recording.", ""

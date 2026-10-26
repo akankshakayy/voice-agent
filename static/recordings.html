@@ -66,6 +66,15 @@
   .line.editing .del:hover { color: var(--bad); }
   .line.removed { opacity: .45; } .line.removed textarea { text-decoration: line-through; }
   .line .heard { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .line.lowconf { box-shadow: inset 3px 0 0 var(--warn); }
+  .issue-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .issue-form .edit-l:first-child { grid-column: 1 / -1; }
+  @media (max-width: 600px) { .issue-form { grid-template-columns: 1fr; } }
+  .learn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .learn-grid { grid-template-columns: 1fr; } }
+  .learn-grid h3 { margin: 4px 0 8px; font-size: 14px; }
+  .learn-grid table { font-size: 13px; } .learn-grid .num { text-align: right; }
+  .sure { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
   .edit-bar { position: sticky; bottom: 0; display: flex; gap: 8px; align-items: center; padding: 10px 0; background: var(--panel); border-top: 1px solid var(--border); margin-top: 8px; }
 </style>
 </head>
@@ -93,7 +102,7 @@
   <section class="panel" style="--tone:var(--c5)">
     <h2>Recorded calls</h2>
     <div class="filters">
-      <select id="fStatus"><option value="">All statuses</option><option value="done">Processed</option><option value="new">Waiting</option><option value="failed">Failed</option></select>
+      <select id="fStatus"><option value="">All statuses</option><option value="check">To check: least sure first</option><option value="done">Processed</option><option value="new">Waiting</option><option value="failed">Failed</option></select>
       <select id="fCat"><option value="">All issue types</option></select>
       <select id="fRm" hidden><option value="">All RMs</option></select>
       <input id="fSearch" placeholder="Search CSP, number, summary, transcript…">
@@ -102,6 +111,13 @@
       <thead><tr><th>Call time</th><th>RM</th><th>CSP</th><th>Length</th><th>Issue</th><th>Status</th><th>From</th></tr></thead>
       <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
     </table></div>
+  </section>
+
+  <section class="panel" id="learnPanel" hidden style="--tone:var(--c3);margin-top:16px">
+    <h2>What corrections teach</h2>
+    <p class="small muted" style="margin-top:-6px">Built from the calls people checked or corrected. Words misheard often enough go into the
+      prompts of the live agent, the call review and the summary.</p>
+    <div id="learn"></div>
   </section>
 </main>
 
@@ -125,6 +141,10 @@ function whoLabel(l, r) {
 }
 let ROWS = [], RMS = [], OPEN = null, STAFF = false, EDITING = false;
 
+// The calls to check: processed CSP calls nobody has checked, the ones the machine was least sure of first
+const needsCheck = r => r.status === "done" && r.has_transcript && !r.checked_at && r.is_csp_call !== 0;
+const sureness = r => { const v = [r.stt_confidence, r.intent_confidence].filter(x => x != null); return v.length ? Math.min(...v) : null; };
+const checkQueue = () => ROWS.filter(needsCheck).sort((a, b) => (sureness(a) ?? .5) - (sureness(b) ?? .5));
 const statusBadge = r => r.status === "new" && r.attempts ? `<span class="badge b-warn">Retrying</span>` : badge(REC_STATUS, r.status);
 const who = r => r.csp_name ? esc(r.csp_name) : r.other_number ? esc(r.other_number) : `<span class="muted">Unknown number</span>`;
 const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -164,9 +184,11 @@ async function refresh() {
     ["Waiting", c.new || 0, c.new ? "being processed" : "nothing waiting", "--c6"],
     ["Failed", c.failed || 0, c.failed ? "open one to see why" : "none", "--c4"],
     ["CSP calls", done.filter(r => r.is_csp_call).length, "of the processed ones", "--c5"],
+    ["To check", ROWS.filter(needsCheck).length, "transcripts nobody checked yet", "--c3"],
   ].map(([l, v, s, t]) => `<div class="kpi" style="--tone:var(${t})"><div class="label">${l}</div><div class="value">${num(v)}</div><div class="sub">${s}</div></div>`).join("");
   $("updated").textContent = "updated " + new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
   render();
+  loadLearning();
   if (OPEN && !EDITING) {
     const r = ROWS.find(x => x.id === OPEN.id);
     if (r && r.status !== OPEN.status) openRec(OPEN.id);         // finished processing while open
@@ -179,7 +201,8 @@ async function refresh() {
 
 function render() {
   const st = $("fStatus").value, cat = $("fCat").value, rm = $("fRm").value, q = $("fSearch").value.toLowerCase();
-  const rows = ROWS.filter(r => (!st || r.status === st) && (!cat || (r.intent || "unknown") === cat) && (!rm || String(r.rm_id) === rm)
+  const base = st === "check" ? checkQueue() : ROWS;
+  const rows = base.filter(r => (!st || st === "check" || r.status === st) && (!cat || (r.intent || "unknown") === cat) && (!rm || String(r.rm_id) === rm)
     && (!q || JSON.stringify([r.csp_name, r.csp_code, r.other_number, r.summary, r.orig_name, r.rm_name]).toLowerCase().includes(q)));
   $("rows").innerHTML = rows.length ? rows.map(r => `<tr class="clickable" onclick="openRec(${r.id})">
       <td class="nowrap">${fmtTime(r.started_at || r.uploaded_at)}<div class="small muted">${r.direction === "incoming" ? "CSP called" : r.direction === "outgoing" ? "RM called" : ""}</div></td>
@@ -188,9 +211,10 @@ function render() {
       <td class="mono nowrap">${fmtDur(r.duration_sec)}</td>
       <td>${r.intent && r.intent !== "unknown" ? catChip(r.intent) : r.status === "done" ? '<span class="muted small">No issue</span>' : ""}
         ${r.summary ? `<div class="small muted sum">${esc(r.summary.slice(0, 110))}</div>` : ""}</td>
-      <td>${statusBadge(r)}</td>
+      <td>${statusBadge(r)}${r.checked_at ? ' <span class="badge b-ok">✓ Checked</span>' : ""}
+        ${st === "check" && sureness(r) != null ? `<div class="sure">Machine ${Math.round(sureness(r) * 100)}% sure</div>` : ""}</td>
       <td><span class="badge ${r.source === "phone" ? "b-accent" : ""}">${r.source === "phone" ? "Phone app" : "Added by hand"}</span></td></tr>`).join("")
-    : `<tr><td colspan="7" class="empty">${ROWS.length ? "No recordings match" : "No recordings yet. They appear here as phones upload them" + (STAFF ? ", or add some above." : ".")}</td></tr>`;
+    : `<tr><td colspan="7" class="empty">${st === "check" && !cat && !rm && !q ? "Nothing to check: every processed call has been checked" : ROWS.length ? "No recordings match" : "No recordings yet. They appear here as phones upload them" + (STAFF ? ", or add some above." : ".")}</td></tr>`;
 }
 
 async function openRec(id) {
@@ -207,7 +231,8 @@ async function openRec(id) {
   const slots = Object.entries(r.slots || {});
   $("drawer").innerHTML = `<div class="drawer-head"><div><h2>${who(r)}</h2>
       <div class="sub">${fmtTime(r.started_at || r.uploaded_at)} · ${esc(r.rm_name || "")} · ${fmtDur(r.duration_sec)}</div></div>
-      <button class="secondary" onclick="closeDrawer()">Close</button></div>
+      <div style="display:flex;gap:8px">${checkQueue().some(x => x.id !== r.id) ? `<button class="secondary" onclick="nextToCheck()">Next call to check →</button>` : ""}
+      <button class="secondary" onclick="closeDrawer()">Close</button></div></div>
     <audio id="player" controls preload="metadata" src="api/recordings/${r.id}/audio"></audio>
     <div class="badges">${statusBadge(r)}
       ${r.intent && r.intent !== "unknown" ? catChip(r.intent) : ""}
@@ -223,16 +248,20 @@ async function openRec(id) {
     <div id="summaryBox">${r.report_md ? `<div class="sec-head"><h3>Detailed summary</h3>
         ${canEdit ? `<button class="secondary" onclick="editSummary()">✎ Correct summary</button>` : ""}</div>
       <p class="report-meta">Written from the whole transcript${r.report_s != null ? ` in ${secs(r.report_s)}` : ""}${r.report_model ? ` · ${esc(r.report_model)}` : ""}. Times in [brackets] point to the transcript below.</p>
-      ${sumFixed ? fixedNote(r, "summary") : ""}
+      ${sumFixed ? fixedNote(r) : ""}
       ${stale ? `<div class="note">The transcript was corrected after this summary was written.
         <button class="linkish" onclick="resummarize(${r.id})">Write the summary again from the corrected transcript</button></div>` : ""}
       <div class="report" id="report">${mdHtml(r.report_md)}</div>`
       : r.report_error ? `<div class="note bad">The summary couldn't be written: ${esc(r.report_error)}</div>`
       : r.status === "done" && r.transcript?.length ? `<div class="note">Writing the detailed summary… This page updates by itself.</div>`
       : r.summary ? `<div class="sec-head"><h3>Summary</h3>${canEdit ? `<button class="secondary" onclick="editSummary()">✎ Correct summary</button>` : ""}</div>
-        ${sumFixed ? fixedNote(r, "summary") : ""}<p>${esc(r.summary)}</p>` : ""}</div>
+        ${sumFixed ? fixedNote(r) : ""}<p>${esc(r.summary)}</p>` : ""}</div>
     ${r.rm_handling ? `<h3>How the RM handled it</h3><p>${esc(r.rm_handling)}</p>` : ""}
+    ${canEdit && r.is_csp_call !== 0 ? `<div id="issueBox"><div class="sec-head"><h3>Issue and details</h3><span style="display:flex;gap:6px">
+        ${!r.issue_checked_at ? `<button class="secondary" onclick="markChecked('issue')">✓ Issue is right</button>` : ""}
+        <button class="secondary" onclick="editIssue()">✎ Correct issue</button></span></div>${issueNote(r)}</div>` : ""}
     <dl class="kv">
+      <dt>Issue type</dt><dd>${r.intent && r.intent !== "unknown" ? catChip(r.intent) : '<span class="muted">No issue / unknown</span>'}</dd>
       ${slots.map(([k, v]) => `<dt>${esc(CONFIG.slot_labels[k] || k)}</dt><dd>${esc(v)}</dd>`).join("")}
       ${r.intent_confidence != null ? `<dt>Issue type confidence</dt><dd>${Math.round(r.intent_confidence * 100)}%</dd>` : ""}
       ${r.language ? `<dt>Language</dt><dd>${esc({ hi: "Hindi", hinglish: "Hinglish", en: "English" }[r.language] || r.language)}</dd>` : ""}
@@ -243,8 +272,9 @@ async function openRec(id) {
       ${r.timing?.stt ? `<dt>Transcribed by</dt><dd>${esc(r.timing.stt)}</dd>` : ""}
     </dl>
     ${lines.length ? `<div class="sec-head"><h3>Transcript</h3>
-        ${canEdit ? `<button class="secondary" onclick="editTranscript()">✎ Correct transcript</button>` : ""}</div>
-      ${r.transcript_edited_at ? fixedNote(r, "transcript") : ""}
+        ${canEdit ? `<span style="display:flex;gap:6px">${!r.checked_at ? `<button class="secondary" onclick="markChecked('transcript')">✓ Transcript is correct</button>` : ""}
+          <button class="secondary" onclick="editTranscript()">✎ Correct transcript</button></span>` : ""}</div>
+      ${r.checked_at || r.transcript_edited_at ? checkNote(r) : ""}
       <p class="small muted" style="margin-top:4px">Click a time to play from there. Personal numbers (Aadhaar, phone, OTP…) are hidden.${r.issue_segment >= 0 ? " The orange line is where the CSP explains the problem." : ""}</p>
       ${lines.some(l => l.voice) ? `<p class="small muted" style="margin-top:-4px">Speakers are told apart by their voices: ${[...new Set(lines.map(l => l.voice).filter(Boolean))].length} found.</p>` : ""}
       <div class="lines" id="lines">${lines.map((l, i) => `<div class="line ${esc(l.speaker || "unknown")} ${i === r.issue_segment ? "issue" : ""}" data-v="${voiceNo(l) || ""}" data-s="${l.start}" data-e="${l.end}">
@@ -287,11 +317,90 @@ function timingHtml(t) {
 // ---- a person's corrections: saved with the machine's version beside them, to measure and train on
 let SHOW_HEARD = false;
 const errText = e => { try { return JSON.parse(e.message.replace(/^\d+ /, "")).detail || e.message; } catch (_) { return e.message; } };
-function fixedNote(r, what) {
-  const n = what === "transcript" ? (r.transcript || []).filter(l => l.heard != null).length : 0;
+function fixedNote(r) {
   return `<div class="note fixed">Corrected by ${esc(r.edited_by || "someone")} · ${fmtTime(r.edited_at)}.
-    ${what === "transcript" && n ? `${n} line${n > 1 ? "s" : ""} changed. <button class="linkish" onclick="SHOW_HEARD = !SHOW_HEARD; openRec(${r.id})">${SHOW_HEARD ? "Hide" : "Show"} what speech-to-text heard</button>` : ""}
-    ${what === "summary" ? `<button class="linkish" onclick="showAgentSummary()">Show the AI's version</button>` : ""}</div>`;
+    <button class="linkish" onclick="showAgentSummary()">Show the AI's version</button></div>`;
+}
+function checkNote(r) {
+  const n = (r.transcript || []).filter(l => l.heard != null).length, gone = (r.removed || []).length;
+  const changes = [n && `${n} line${n > 1 ? "s" : ""} corrected`, gone && `${gone} made-up line${gone > 1 ? "s" : ""} removed`].filter(Boolean);
+  return `<div class="note fixed">${r.checked_at ? `Checked by ${esc(r.checked_by || "someone")} · ${fmtTime(r.checked_at)}` : `Corrected by ${esc(r.edited_by || "someone")}`}.
+    ${r.stt_wer != null ? `Speech-to-text got <b>${accuracy(r.stt_wer)}</b> of ${num(r.stt_words)} words right.` : ""}
+    ${changes.length ? changes.join(", ") + "." : r.checked_at ? "Nothing needed changing." : ""}
+    ${n ? `<button class="linkish" onclick="SHOW_HEARD = !SHOW_HEARD; openRec(${r.id})">${SHOW_HEARD ? "Hide" : "Show"} what speech-to-text heard</button>` : ""}</div>`;
+}
+const accuracy = wer => `${Math.max(0, Math.round((1 - wer) * 1000) / 10)}%`;
+function issueNote(r) {
+  if (!r.issue_checked_at) return "";
+  if (r.agent_intent == null) return `<div class="note fixed">Checked by ${esc(r.issue_checked_by || "someone")} · ${fmtTime(r.issue_checked_at)}: the AI got it right.</div>`;
+  const was = Object.entries(r.agent_slots || {}).map(([k, v]) => `${esc(CONFIG.slot_labels[k] || k)}: ${esc(v)}`).join(", ");
+  return `<div class="note fixed">Corrected by ${esc(r.issue_checked_by || "someone")} · ${fmtTime(r.issue_checked_at)}.
+    The AI said: ${esc(CONFIG.categories[r.agent_intent]?.label || "No issue / unknown")}${was ? ` (${was})` : ""}.</div>`;
+}
+function editIssue() {
+  EDITING = true;
+  const r = OPEN;
+  $("issueBox").innerHTML = `<div class="sec-head"><h3>Correct the issue</h3></div>
+    <p class="small muted">Leave a detail empty if it wasn't said in the call.</p>
+    <div class="issue-form">
+      <label class="edit-l">Issue type<select id="eIntent">${Object.entries(CONFIG.categories).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("")}
+        <option value="unknown">No issue / unknown</option></select></label>
+      ${Object.entries(CONFIG.slot_labels).map(([k, v]) => `<label class="edit-l">${esc(v)}<input data-slot="${k}"></label>`).join("")}
+    </div>
+    <div class="acts" style="margin-top:6px"><button onclick="saveIssue()">Save corrections</button>
+      <button class="secondary" onclick="openRec(OPEN.id)">Cancel</button></div>`;
+  $("eIntent").value = r.intent || "unknown";
+  document.querySelectorAll("#issueBox [data-slot]").forEach(el => el.value = r.slots[el.dataset.slot] || "");
+}
+async function saveIssue() {
+  const slots = {};
+  document.querySelectorAll("#issueBox [data-slot]").forEach(el => { if (el.value.trim()) slots[el.dataset.slot] = el.value.trim(); });
+  await saveEdits({ intent: $("eIntent").value, slots });
+}
+async function markChecked(what) { await saveEdits({ checked: [what] }); }
+function nextToCheck() {
+  const next = checkQueue().find(x => x.id !== OPEN?.id);
+  if (next) { EDITING = false; openRec(next.id); }
+}
+
+async function loadLearning() {
+  let d;
+  try { d = await api("api/recordings/learning"); } catch (e) { return; }
+  const t = d.transcripts, i = d.issues;
+  $("learnPanel").hidden = false;
+  if (!t.calls && !i.checked) {
+    $("learn").innerHTML = `<p class="muted">Nothing checked yet. Open a call, then press ✓ if the transcript or issue is right, or correct it.
+      ${t.to_check ? `<button class="linkish" style="background:none;border:0;box-shadow:none;color:var(--accent);cursor:pointer;text-decoration:underline;padding:0"
+      onclick="$('fStatus').value='check'; render(); $('rows').scrollIntoView({behavior:'smooth'})">Show the ${num(t.to_check)} calls to check</button>` : ""}</p>`;
+    return;
+  }
+  const pct = v => v == null ? "–" : `${v}%`;
+  const kpi = (l, v, sub, tone) => `<div class="kpi" style="--tone:var(${tone})"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${sub}</div></div>`;
+  const werRows = rows => rows.map(x => `<tr><td>${esc(x.stt || x.week)}</td><td class="num">${num(x.calls)}</td><td class="num">${num(x.words)}</td>
+    <td class="num"><b>${x.wer == null ? "–" : accuracy(x.wer)}</b></td></tr>`).join("");
+  $("learn").innerHTML = `<div class="kpis">
+      ${kpi("Transcripts checked", num(t.calls), `${num(t.to_check)} still to check`, "--c1")}
+      ${kpi("Words heard right", t.wer == null ? "–" : accuracy(t.wer), `of ${num(t.words)} words checked`, "--c2")}
+      ${kpi("Issue type right", pct(i.type_right_pct), `of ${num(i.checked)} issues checked`, "--c5")}
+      ${kpi("Details right", pct(i.details_right_pct), i.detail_fixes.length ? `most fixed: ${esc(i.detail_fixes[0].label)}` : "amount, IDs, bank…", "--c6")}
+    </div>
+    <div class="learn-grid">
+      <div>
+        <h3>Speech-to-text accuracy, by setup</h3>
+        ${t.by_stt.length ? `<div class="table-wrap"><table><thead><tr><th>Setup</th><th class="num">Calls</th><th class="num">Words</th><th class="num">Right</th></tr></thead>
+          <tbody>${werRows(t.by_stt)}</tbody></table></div>` : '<p class="muted small">No transcripts checked yet.</p>'}
+        ${t.by_week.length ? `<h3 style="margin-top:14px">By week processed</h3><div class="table-wrap"><table><thead><tr><th>Week of</th><th class="num">Calls</th><th class="num">Words</th><th class="num">Right</th></tr></thead>
+          <tbody>${werRows(t.by_week.slice().reverse())}</tbody></table></div>` : ""}
+      </div>
+      <div>
+        <h3>Words speech-to-text keeps mishearing</h3>
+        ${d.misheard.length ? `<div class="table-wrap"><table><thead><tr><th>Heard</th><th>Really said</th><th class="num">Times</th><th class="num">Calls</th></tr></thead>
+          <tbody>${d.misheard.map(p => `<tr><td>${esc(p.heard)}</td><td><b>${esc(p.said)}</b>${p.count >= d.misheard_in_prompts_from ? ' <span class="badge b-ok" title="Given to the agent, the call review and the summary">in prompts</span>' : ""}</td>
+            <td class="num">${num(p.count)}</td><td class="num">${num(p.calls)}</td></tr>`).join("")}</tbody></table></div>
+          <p class="small muted">Seen ${d.misheard_in_prompts_from} times or more: given to the AI as a hint.</p>`
+          : '<p class="muted small">None yet. Corrected transcript lines show up here.</p>'}
+      </div>
+    </div>`;
 }
 function showAgentSummary() {
   const r = OPEN, w = window.open("", "_blank");
@@ -321,7 +430,7 @@ function editTranscript() {
   EDITING = true;
   const r = OPEN, voices = [...new Set(r.transcript.map(l => l.voice).filter(Boolean))].sort();
   const roles = r.is_csp_call !== 0;
-  $("lines").innerHTML = r.transcript.map((l, i) => `<div class="line editing" data-i="${i}">
+  $("lines").innerHTML = r.transcript.map((l, i) => `<div class="line editing ${l.avg_logprob != null && Math.exp(l.avg_logprob) < .6 ? "lowconf" : ""}" data-i="${i}">
       <button class="t" onclick="seek(${l.start})" aria-label="Play from ${clock(l.start)}">${clock(l.start)}</button>
       <span class="whosel">
         ${voices.length ? `<select class="ev" aria-label="Voice">${voices.map(v => `<option value="${v}" ${v === l.voice ? "selected" : ""}>Speaker ${voiceNo({ voice: v })}</option>`).join("")}</select>` : ""}
@@ -331,7 +440,8 @@ function editTranscript() {
       <button class="del" title="Remove this line (e.g. nobody said it)" onclick="toggleLine(this)">✕</button></div>`).join("")
     + `<div class="edit-bar"><button onclick="saveTranscript()">Save corrections</button>
       <button class="secondary" onclick="openRec(OPEN.id)">Cancel</button>
-      <span class="small muted">Play a line with its time, fix the words or the speaker. ✕ removes a line nobody said.</span></div>`;
+      <span class="small muted">Play a line with its time, fix the words or the speaker. ✕ removes a line nobody said.
+        ${r.transcript.some(l => l.avg_logprob != null) ? "Lines marked on the left are the ones speech-to-text was least sure of." : ""} Saving marks the whole transcript as checked.</span></div>`;
   document.querySelectorAll("#lines .line.editing").forEach(el => {
     const ta = el.querySelector(".et");
     ta.value = r.transcript[+el.dataset.i].text;

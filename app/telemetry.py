@@ -156,3 +156,59 @@ def record_correction(source: str, ref_id: int, field: str, before, after, actor
             VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
          (ts or db.now(), source, ref_id, call_id, field, before, after, edit_distance(before, after),
           delta(before, after), actor, last["prompt_version"] if last else None))
+
+
+# ---------------------------------------------------------------- why the agent did what it did
+UNSURE_BELOW = float(os.environ.get("WHY_UNSURE_BELOW", "0.75"))   # amber in the UI below this confidence
+_RULE_REASONS = ("Suspected fraud", "CSP sounded angry", "Call exceeded max turns", "CSP asked to speak to RM",
+                 "Not understood", "Call dropped")
+
+
+def explain_ticket(t: dict) -> dict:
+    """What the RM sees under "Why": who decided (a safety rule or the model), what the agent was given,
+    and for each detail the caller's words it came from, marked unsure when the speech or the model was."""
+    from .taxonomy import INTENT_CONFIDENCE_MIN
+    call = db.q("SELECT intent, intent_confidence, engine FROM calls WHERE id=?", (t["call_id"],), one=True) or {}
+    turns = db.q("SELECT id, role, text, stt_confidence, engine FROM turns WHERE call_id=? ORDER BY id",
+                 (t["call_id"],))
+    by_id = {x["id"]: x for x in turns}
+    traces = traces_for_call(t["call_id"]) if t.get("call_id") else []
+
+    def unsure(conf):
+        return conf is not None and conf < UNSURE_BELOW
+
+    # Where each detail first appeared: the turn whose decision added or changed it
+    source = {}
+    for tr in traces:
+        before = (tr.get("context") or {}).get("slots_before") or {}
+        for k, v in ((tr.get("output") or {}).get("slots") or {}).items():
+            if not k.startswith("_") and before.get(k) != v:
+                source[k] = tr
+    details = []
+    for k, v in json.loads(t.get("agent_details_json") or t.get("details_json") or "{}").items():
+        tr = source.get(k)
+        turn = by_id.get(tr["turn_id"]) if tr else None
+        conf = turn["stt_confidence"] if turn else None
+        details.append({"slot": k, "value": v, "heard": turn["text"] if turn else None, "speech_confidence": conf,
+                        "unsure": unsure(conf)})
+
+    reason = t.get("escalation_reason") or ""
+    last_csp = next((x for x in reversed(turns) if x["role"] == "csp"), None)
+    by_rule = bool(reason) and (reason.startswith(_RULE_REASONS) or (last_csp or {}).get("engine") == "guard")
+    last = traces[-1] if traces else None
+    ctx = (last or {}).get("context") or {}
+    conf = call.get("intent_confidence")
+    return {
+        "decided_by": "safety rule" if by_rule else ("rules engine" if (last or {}).get("engine") == "rules"
+                                                     else "AI model" if last else "unknown"),
+        "rule": reason if by_rule else None,
+        "model": (last or {}).get("model"), "prompt_version": (last or {}).get("prompt_version"),
+        "intent": call.get("intent"), "intent_confidence": conf,
+        "intent_unsure": conf is not None and conf < max(INTENT_CONFIDENCE_MIN, UNSURE_BELOW),
+        "context": {"csp_code": (ctx.get("csp") or {}).get("csp_code"), "rm_name": ctx.get("rm_name"),
+                    "past_tickets": ctx.get("past_tickets") or [], "turns_seen": len(traces)},
+        "details": details,
+        "unsure_turns": [x["text"] for x in turns if x["role"] == "csp" and unsure(x["stt_confidence"])],
+        "unsure_below": UNSURE_BELOW,
+        "traced": bool(traces),
+    }

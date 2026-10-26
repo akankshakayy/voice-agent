@@ -121,6 +121,22 @@ def test_rm_fixes_become_corrections_and_metrics():
     assert f["fields_changed"]["summary"] == 1 and f["biggest_corrections"]
 
 
+def test_why_panel_explains_ticket():
+    from app import db, telemetry
+    r = talk([("Mera DMT transfer fail ho gaya", .9), ("TXN123456789", .5), ("5000 rupaye", .95), ("kal", .9),
+              ("haan ji kar dijiye", .9)])
+    telemetry.flush()
+    t = db.q("SELECT * FROM tickets WHERE id=?", (r["ticket"]["id"],), one=True)
+    w = telemetry.explain_ticket(t)
+    assert w["decided_by"] == "rules engine" and w["traced"] and w["context"]["csp_code"]
+    d = {x["slot"]: x for x in w["details"]}
+    assert d["txn_id"]["heard"] == "TXN123456789" and d["txn_id"]["unsure"]       # said with 50% clear speech
+    assert d["amount"]["heard"] == "5000 rupaye" and not d["amount"]["unsure"]
+    e = talk([("Mujhe RM se baat karni hai", .9)])
+    w = telemetry.explain_ticket(db.q("SELECT * FROM tickets WHERE id=?", (e["ticket"]["id"],), one=True))
+    assert w["decided_by"] == "safety rule" and "RM" in w["rule"]
+
+
 def test_edit_distance():
     from app.telemetry import edit_distance, delta
     assert edit_distance("kitten", "sitting") == 3 and edit_distance("", "abc") == 3
@@ -1751,3 +1767,55 @@ def test_rm_corrects_only_their_own_recordings():
     assert r.status_code == 200 and r.json()["changed"] == 1
     assert admin.get(f"/api/recordings/{mine}").json()["edited_by"] == "Second"
     assert rm2.patch(f"/api/recordings/{mine}", json={"lines": [{"i": 0, "text": "  "}]}).status_code == 400
+
+
+def test_checked_transcripts_are_scored_and_teach_misheard_words():
+    from app import misheard, recordings
+    a, b, c = _done_recording(), _done_recording(), _done_recording()
+    fix = "मेरा DMT फेल हो गया 5000 का"
+    for rid in (a, b):          # the same word misheard on two calls: it goes into the prompts
+        recordings.save_edits(rid, "Asha", lines=[{"i": 0, "text": "हेलो सर"}, {"i": 2, "text": fix}])
+    recordings.save_edits(c, "Asha", checked=["transcript"])                    # checked, nothing changed
+    ra, rc = recordings.get_recording(a), recordings.get_recording(c)
+    # 1 word misheard + 3 made-up words, against the 9 words really said
+    assert (ra["stt_errors"], ra["stt_words"]) == (4, 9) and ra["removed"][0]["text"] == "Thanks for watching"
+    assert rc["checked_by"] == "Asha" and rc["stt_errors"] == 0 and rc["transcript_edited_at"] is None
+    pairs = misheard.pairs()
+    assert pairs[0]["heard"] == "डीएमटी" and pairs[0]["said"] == "DMT" and pairs[0]["calls"] == 2
+    assert all("5000" not in p["said"] for p in pairs)                           # values are not vocabulary
+    assert '"डीएमटी" -> "DMT"' in misheard.hint()
+    from app import llm_engine
+    assert "डीएमटी" in llm_engine._system_prompt({"history": []})               # the live agent is told too
+    stats = recordings.learning_stats()
+    assert stats["transcripts"]["calls"] == 3 and stats["transcripts"]["words"] == 9 + 9 + 12
+    assert stats["transcripts"]["wer"] == round(8 / stats["transcripts"]["words"], 4)
+    misheard.forget()
+
+
+def test_issue_type_and_details_corrected_or_confirmed():
+    from app import db, recordings
+    a, b = _done_recording(), _done_recording()
+    db.update("recordings", a, intent="aeps_issue", slots_json={"amount": "500"})
+    db.update("recordings", b, intent="aeps_issue", slots_json={})
+    recordings.save_edits(a, "Asha", intent="dmt_failed", slots={"amount": "5000", "txn_id": "txn 123 456", "bank_name": ""})
+    recordings.save_edits(b, "Asha", checked=["issue"])
+    ra = recordings.get_recording(a)
+    assert ra["intent"] == "dmt_failed" and ra["slots"] == {"amount": "5000", "txn_id": "TXN123456"}
+    assert ra["agent_intent"] == "aeps_issue" and ra["agent_slots"] == {"amount": "500"} and ra["issue_checked_by"] == "Asha"
+    fields = {c["field"] for c in db.q("SELECT field FROM corrections WHERE source='recording' AND ref_id=?", (a,))}
+    assert fields == {"category", "detail:amount", "detail:txn_id"}
+    i = recordings.learning_stats()["issues"]
+    assert i["checked"] == 2 and i["type_right_pct"] == 50.0 and i["details_right_pct"] == 50.0
+    assert {f["slot"] for f in i["detail_fixes"]} == {"amount", "txn_id"}
+    with pytest.raises(ValueError):
+        recordings.save_edits(a, "Asha", intent="made_up")
+
+
+def test_whisper_certainty_orders_the_queue():
+    from app import recordings
+    cache = {"segments": [{"start": 0, "end": 1, "avg_logprob": 0.0}, {"start": 1, "end": 4, "avg_logprob": -1.0}]}
+    assert recordings.stt_confidence(cache) == round((1 + 3 * 0.3679) / 4, 3)
+    assert recordings.stt_confidence({"lines": []}) is None
+    admin = _client()
+    _done_recording()
+    assert admin.get("/api/recordings/learning").json()["transcripts"]["to_check"] == 1

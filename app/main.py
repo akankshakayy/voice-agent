@@ -592,6 +592,7 @@ def ticket(ticket_id: int, request: Request):
     t["details"] = json.loads(t.pop("details_json") or "{}")
     t["events"] = db.q("SELECT * FROM ticket_events WHERE ticket_id=? ORDER BY ts", (ticket_id,))
     t["transcript"] = db.q("SELECT role,text,ts,stt_confidence FROM turns WHERE call_id=? ORDER BY id", (t["call_id"],))
+    t["why"] = telemetry.explain_ticket(t)   # who decided, from what, and which details came from unclear speech
     return t
 
 
@@ -745,6 +746,13 @@ def _own_recording(request: Request, rec_id: int) -> dict:
     return r
 
 
+@app.get("/api/recordings/learning", dependencies=[Depends(allow("admin", "ops", "rm"))])
+def recordings_learning(request: Request, rm_id: int | None = None):
+    """What people's corrections say: speech-to-text accuracy over time, how often the AI's issue was right,
+    and the words speech-to-text keeps mishearing."""
+    return recordings.learning_stats(rm_scope(request, rm_id))
+
+
 @app.get("/api/recordings/{rec_id}", dependencies=[Depends(allow("admin", "ops", "rm"))])
 def get_recording(rec_id: int, request: Request):
     return _own_recording(request, rec_id)
@@ -808,6 +816,9 @@ class RecordingEditBody(BaseModel):
     lines: list[dict] | None = None      # every line kept: {"i", "text", "speaker", "voice"}
     summary: str | None = None
     report_md: str | None = None
+    intent: str | None = None
+    slots: dict | None = None            # every detail to keep: {"amount": "5000", ...}
+    checked: list[str] = []              # "transcript" / "issue": checked by a person, nothing to change
 
 
 @app.patch("/api/recordings/{rec_id}")
@@ -816,7 +827,8 @@ def edit_recording(rec_id: int, body: RecordingEditBody, request: Request,
     """Correct the transcript or the summaries. The RM who made the call may correct their own recordings."""
     _own_recording(request, rec_id)
     try:
-        return recordings.save_edits(rec_id, _who(actor), body.lines, body.summary, body.report_md)
+        return recordings.save_edits(rec_id, _who(actor), body.lines, body.summary, body.report_md, body.intent,
+                                     body.slots, body.checked)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

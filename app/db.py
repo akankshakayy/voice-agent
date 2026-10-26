@@ -195,7 +195,14 @@ def conn() -> sqlite3.Connection:
         # A person's corrections to a recording (app/recordings.py save_edits). agent_* hold the machine's version
         # while a person's text is shown; NULL = the current text is the machine's own
         _add_columns(_conn, "recordings", {"agent_summary": "TEXT", "agent_report_md": "TEXT",
-                                           "transcript_edited_at": "REAL", "edited_at": "REAL", "edited_by": "TEXT"})
+                                           "agent_intent": "TEXT", "agent_slots_json": "TEXT",
+                                           "transcript_edited_at": "REAL", "edited_at": "REAL", "edited_by": "TEXT",
+                                           "removed_json": "TEXT",       # lines a person removed (nobody said them)
+                                           # a person checked the whole transcript: its word errors against theirs
+                                           "checked_at": "REAL", "checked_by": "TEXT",
+                                           "stt_errors": "INTEGER", "stt_words": "INTEGER",
+                                           "issue_checked_at": "REAL", "issue_checked_by": "TEXT",
+                                           "stt_confidence": "REAL"})    # Whisper's own certainty, 0-1
         if "agent_summary" not in {r[1] for r in _conn.execute("PRAGMA table_info(tickets)")}:
             # The agent's own version of a ticket, kept when an RM edits it (correction delta, acceptance rate)
             _add_columns(_conn, "tickets", {"agent_summary": "TEXT", "agent_details_json": "TEXT",

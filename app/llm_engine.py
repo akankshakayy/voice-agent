@@ -8,7 +8,7 @@ import json
 import os
 import time
 
-from . import spoken
+from . import misheard, spoken
 from .taxonomy import CATEGORIES, SLOT_LABELS, INTENT_CONFIDENCE_MIN
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
@@ -110,6 +110,7 @@ No markdown, lists or emojis. Never ask for OTP, PIN, password or Aadhaar number
 amount or timeline you do not know - say the RM team will check.
 Never say a ticket number yourself - when you set action=create_ticket the system reads out the real number.
 If the last message was unclear or garbled, set understood=false and politely ask them to repeat.
+{misheard.hint()}
 
 CALL CONTEXT
 - Direction: {state.get('direction')} | Purpose: {state.get('purpose')}

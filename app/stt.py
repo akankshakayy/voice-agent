@@ -85,7 +85,9 @@ def transcribe_detailed(audio: bytes, filename: str, lang: str = "hi", model: st
         timestamp_granularities=["word", "segment"] if words else ["segment"], **extra)
     get = lambda s, k: s.get(k) if isinstance(s, dict) else getattr(s, k, None)  # noqa: E731
     segs = [{"start": round(float(get(s, "start") or 0), 2), "end": round(float(get(s, "end") or 0), 2),
-             "text": (get(s, "text") or "").strip()} for s in (getattr(r, "segments", None) or [])
+             "text": (get(s, "text") or "").strip(),
+             **({"avg_logprob": round(float(get(s, "avg_logprob")), 3)} if get(s, "avg_logprob") is not None else {})}
+            for s in (getattr(r, "segments", None) or [])
             if (get(s, "text") or "").strip()]
     ws = [{"start": round(float(get(w, "start") or 0), 2), "end": round(float(get(w, "end") or 0), 2),
            "word": (get(w, "word") or "").strip()} for w in (getattr(r, "words", None) or []) if (get(w, "word") or "").strip()]

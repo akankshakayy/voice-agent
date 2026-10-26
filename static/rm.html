@@ -173,6 +173,7 @@ async function openTicket(id) {
       <dt>Created</dt><dd>${fmtTime(t.created_at)} · SLA ${slaText(t)}</dd>
       ${t.closed_at ? `<dt>Closed</dt><dd>${fmtTime(t.closed_at)}</dd>` : ""}
     </dl>
+    ${whyHtml(t.why)}
     <h3 style="margin-top:18px">Update</h3>
     <div class="grid" style="grid-template-columns:1fr 1fr">
       <div><label class="small muted">Status</label><select id="dStatus" style="width:100%">${["open", "in_progress", "resolved", "closed"].map(s => `<option value="${s}" ${t.status === s ? "selected" : ""}>${STATUS[s][0]}</option>`).join("")}</select></div>
@@ -182,12 +183,26 @@ async function openTicket(id) {
     <button style="margin-top:8px" onclick="saveTicket(${t.id})">Save</button>
     <p class="small muted">Fix the summary, details or category right here if the agent got them wrong. Every fix is kept and shows how well the agent is doing.</p>
     <h3 style="margin-top:18px">Call transcript</h3>
-    ${t.transcript.map(m => `<div class="bubble ${m.role}">${esc(m.text)}${m.stt_confidence != null ? `<div class="meta">speech conf ${Math.round(m.stt_confidence * 100)}%</div>` : ""}</div>`).join("") || '<div class="muted">No transcript</div>'}
+    ${t.transcript.map(m => `<div class="bubble ${m.role}">${m.role === "csp" && m.stt_confidence != null && m.stt_confidence < t.why.unsure_below ? `<span class="unsure" title="Speech was unclear here">${esc(m.text)}</span>` : esc(m.text)}${m.stt_confidence != null ? `<div class="meta">speech conf ${Math.round(m.stt_confidence * 100)}%</div>` : ""}</div>`).join("") || '<div class="muted">No transcript</div>'}
     <h3 style="margin-top:18px">History</h3>
     ${t.events.map(e => `<div class="ev"><span class="muted">${fmtTime(e.ts)}</span> · <b>${esc(e.actor)}</b> ${esc(e.action)} ${e.note ? "· " + esc(e.note) : ""}</div>`).join("")}`;
   $("drawer").classList.add("open"); $("drawerBg").classList.add("open");
 }
 function closeDrawer() { $("drawer").classList.remove("open"); $("drawerBg").classList.remove("open"); }
+// "Why": who decided, what the agent was given, and which details came from unclear speech (amber)
+function whyHtml(w) {
+  if (!w) return "";
+  const pc = v => v != null ? Math.round(v * 100) + "%" : "–";
+  const unsure = w.details.filter(d => d.unsure).length;
+  return `<details class="why" ${unsure || w.intent_unsure ? "open" : ""}><summary>Why the agent did this ${unsure ? `<span class="badge b-warn">${unsure} detail${unsure > 1 ? "s" : ""} to check</span>` : ""}</summary>
+    <div class="row small"><b>Decided by:</b> ${w.decided_by === "safety rule" ? `a safety rule: ${esc(w.rule)}` : esc(w.decided_by)}${w.model ? ` <span class="muted">(${esc(w.model)} · ${esc(w.prompt_version || "")})</span>` : ""}</div>
+    ${w.intent ? `<div class="row small"><b>Issue understood as:</b> ${esc(catLabel(w.intent))} · <span class="${w.intent_unsure ? "unsure" : ""}">${pc(w.intent_confidence)} sure</span></div>` : ""}
+    ${w.traced ? `<div class="row small"><b>Agent was given:</b> CSP ${esc(w.context.csp_code || "not identified")}${w.context.rm_name ? ", RM " + esc(w.context.rm_name) : ""}, ${w.context.past_tickets.length ? "past tickets " + w.context.past_tickets.map(esc).join(", ") : "no past tickets"}</div>
+    ${w.details.length ? `<div class="row small"><b>Where each detail came from:</b></div>${w.details.map(d => `<div class="row small">· ${esc(CONFIG.slot_labels[d.slot] || d.slot)} <b>${esc(d.value)}</b> ← ${d.heard ? `<span class="${d.unsure ? "unsure" : "muted"}">"${esc(d.heard)}"</span>${d.speech_confidence != null ? ` <span class="muted">(${pc(d.speech_confidence)} clear)</span>` : ""}` : `<span class="muted">not traced</span>`}</div>`).join("")}` : ""}
+    ${unsure ? `<div class="row small">Amber = the caller's speech was unclear (below ${pc(w.unsure_below)}). Check these with the CSP before acting.</div>` : ""}`
+    : `<div class="row small muted">${w.decided_by === "safety rule" ? "The safety rule acted before the AI was asked anything." : "This call happened before Sahayak started recording the agent's reasoning."}</div>`}</details>`;
+}
+
 // The details the agent captured, plus any the category needs that it missed
 function detailKeys(t) {
   return [...new Set([...Object.keys(t.details), ...((CONFIG.categories[t.rm_category || t.category] || {}).slots || [])])];
