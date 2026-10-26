@@ -53,6 +53,13 @@
     <section class="panel" style="--tone:var(--c4)"><h2>Most common mix-ups</h2><p class="help">Agent predicted → RM corrected to</p><div id="confusions"></div>
       <h2 style="margin-top:16px">Engine errors / fallbacks</h2><div id="errors"></div></section>
   </div>
+
+  <div class="section-title" style="margin-top:28px"><span class="tag model">Learning from RM fixes</span> <span class="small muted" id="promptTag"></span></div>
+  <div class="kpis" id="fbKpis"></div>
+  <div class="g3" style="grid-template-columns:1fr 1fr">
+    <section class="panel" style="--tone:var(--c5)"><h2>By prompt version</h2><p class="help">Each change to the agent's prompt gets a new version. Compare them on the same numbers.</p><div class="table-wrap" id="fbVersions"></div></section>
+    <section class="panel" style="--tone:var(--c3)"><h2>Biggest fixes</h2><p class="help">Where RMs changed the most. Good cases for the test set.</p><div id="fbBiggest"></div></section>
+  </div>
 </main>
 
 <div class="drawer-bg" id="drawerBg"></div>
@@ -84,7 +91,7 @@ function chart(id, cfg) { if (charts[id]) { charts[id].data = cfg.data; charts[i
 const noGrid = { grid: { display: false } };
 
 async function refresh() {
-  const [a, m] = await Promise.all([api(`api/metrics/agent?hours=${HOURS}`), api(`api/metrics/model?hours=${HOURS}`)]);
+  const [a, m, f] = await Promise.all([api(`api/metrics/agent?hours=${HOURS}`), api(`api/metrics/model?hours=${HOURS}`), api(`api/metrics/feedback?hours=${HOURS}`)]);
   const T = a.totals;
   kpis("agentKpis", [
     ["Total calls", num(T.calls), `${T.inbound} in · ${T.outbound} out`],
@@ -153,6 +160,19 @@ async function refresh() {
     options: { maintainAspectRatio: false, scales: { x: noGrid, y: { beginAtZero: true } } } });
   $("confusions").innerHTML = I.top_confusions.length ? `<table><tbody>${I.top_confusions.map(c => `<tr><td>${esc(c.predicted)}</td><td class="muted">→</td><td>${esc(c.actual)}</td><td class="mono">${c.count}</td></tr>`).join("")}</tbody></table>` : `<div class="empty small">No mix-ups recorded yet</div>`;
   $("errors").innerHTML = m.errors.recent.length ? m.errors.recent.map(e => `<div class="small"><span class="muted">${fmtTime(e.ts)}</span> ${esc(e.error)}</div>`).join("") : `<div class="empty small">None</div>`;
+  // ---- learning from RM fixes
+  const pct = v => v != null ? v + "%" : "–";
+  $("promptTag").textContent = `Current prompt: ${f.current_prompt_version}`;
+  kpis("fbKpis", [
+    ["Accepted as-is", pct(f.acceptance_pct), `${f.reviewed} tickets saved by RMs · target over 75%`, "", f.acceptance_pct != null && f.acceptance_pct < 75 ? "--c4" : ""],
+    ["Correction delta", pct(f.correction_delta_pct), "how much RMs rewrote · target near 0"],
+    ["Chars changed", f.avg_chars_changed ?? "–", "per reviewed ticket"],
+    ["Summary fixed", num(f.fields_changed.summary || 0), "tickets"],
+    ["Details fixed", num(f.fields_changed.details || 0), "tickets"],
+    ["Category fixed", num(f.fields_changed.category || 0), "tickets"],
+  ]);
+  $("fbVersions").innerHTML = f.by_prompt_version.length ? `<table><thead><tr><th>Version</th><th>Calls</th><th>Tokens / call</th><th>Reviewed</th><th>Accepted</th><th>Delta</th></tr></thead><tbody>${f.by_prompt_version.map(v => `<tr><td class="mono small">${esc(v.version)}${v.version === f.current_prompt_version ? " ●" : ""}</td><td>${v.calls ?? "–"}</td><td>${v.tokens_per_call != null ? num(v.tokens_per_call) : "–"}</td><td>${v.reviewed ?? 0}</td><td>${pct(v.acceptance_pct)}</td><td>${pct(v.correction_delta_pct)}</td></tr>`).join("")}</tbody></table>` : `<div class="empty small">No traced calls yet</div>`;
+  $("fbBiggest").innerHTML = f.biggest_corrections.length ? f.biggest_corrections.map(c => `<div class="small" style="margin-bottom:8px"><b>${esc(c.field)}</b> <span class="muted">· ticket #${c.ticket_id} · ${Math.round(c.delta * 100)}% changed · ${esc(c.actor || "")}</span><div><s class="muted">${esc((c.before || "(empty)").slice(0, 160))}</s></div><div>${esc((c.after || "(empty)").slice(0, 160))}</div></div>`).join("") : `<div class="empty small">No fixes yet</div>`;
   $("updated").textContent = "updated " + new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
@@ -164,7 +184,7 @@ function tickLive() {
 }
 
 async function openCall(id) {
-  const c = await api(`api/calls/${id}`);
+  const [c, tr] = await Promise.all([api(`api/calls/${id}`), api(`api/calls/${id}/traces`).catch(() => [])]);
   $("drawer").innerHTML = `<div class="drawer-head"><div><h2>Call #${c.id}</h2><div class="sub">${esc(c.csp_name || "Unknown caller")} · ${fmtTime(c.started_at)}</div></div><button class="secondary" onclick="closeDrawer()">Close</button></div>
     <dl class="kv">
       <dt>CSP</dt><dd>${esc(c.csp_name || "Unknown")} ${c.csp_code ? `(${c.csp_code})` : ""}</dd><dt>RM</dt><dd>${esc(c.rm_name || "–")}</dd>
@@ -179,7 +199,14 @@ async function openCall(id) {
     ${c.turns.map(t => `<div class="bubble ${t.role}">${esc(t.text)}<div class="meta">${[
       t.stt_confidence != null ? `STT ${Math.round(t.stt_confidence * 100)}%` : "",
       t.intent ? `intent ${esc(t.intent)} ${t.intent_confidence != null ? Math.round(t.intent_confidence * 100) + "%" : ""}` : "",
-      t.latency_ms != null ? `${num(t.latency_ms, 1)} ms` : "", t.engine && t.role === "csp" ? esc(t.engine) : "", t.error ? `⚠ ${esc(t.error)}` : ""].filter(Boolean).join(" · ")}</div></div>`).join("")}`;
+      t.latency_ms != null ? `${num(t.latency_ms, 1)} ms` : "", t.engine && t.role === "csp" ? esc(t.engine) : "", t.error ? `⚠ ${esc(t.error)}` : ""].filter(Boolean).join(" · ")}</div></div>`).join("")}
+    <h3 style="margin-top:18px">What the model saw</h3>
+    ${tr.length ? tr.map((x, i) => `<details style="margin-bottom:6px"><summary class="small">Turn ${i + 1} · ${esc(x.engine || "")} ${esc(x.model || "")} · <span class="mono">${esc(x.prompt_version || "")}</span> · ${x.input_tokens ?? 0} in / ${x.output_tokens ?? 0} out tokens</summary>
+      <div class="small"><b>Heard:</b> ${esc(x.context?.heard || "")}</div>
+      <div class="small"><b>Context given:</b> CSP ${esc(x.context?.csp?.csp_code || "unknown")}, ${(x.context?.past_tickets || []).length} past tickets, details so far ${esc(JSON.stringify(x.context?.slots_before || {}))}</div>
+      <div class="small"><b>Decided:</b> ${esc(x.output?.intent || "")} (${Math.round((x.output?.intent_confidence || 0) * 100)}%) → ${esc(x.output?.action || "")}${x.output?.escalation_reason ? " · " + esc(x.output.escalation_reason) : ""}</div>
+      ${x.system_prompt ? `<pre class="small" style="white-space:pre-wrap;max-height:240px;overflow:auto">${esc(x.system_prompt)}</pre>` : `<div class="small muted">Rules engine: no prompt</div>`}
+      ${x.raw_output ? `<pre class="small" style="white-space:pre-wrap">${esc(JSON.stringify(x.raw_output, null, 1))}</pre>` : ""}</details>`).join("") : `<div class="empty small">No traces for this call (made before tracing started)</div>`}`;
   $("drawer").classList.add("open"); $("drawerBg").classList.add("open");
 }
 function closeDrawer() { $("drawer").classList.remove("open"); $("drawerBg").classList.remove("open"); }

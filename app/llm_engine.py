@@ -205,18 +205,21 @@ class ClaudeEngine:
 
     def decide(self, state: dict, user_text: str) -> dict:
         t0 = time.perf_counter()
+        system, messages = _system_prompt(state), _build_messages(state, user_text)
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=600,
-            system=_system_prompt(state),
-            messages=_build_messages(state, user_text),
+            system=system,
+            messages=messages,
             tools=[AGENT_TURN_TOOL],
             tool_choice={"type": "tool", "name": "agent_turn"},
         )
         latency = (time.perf_counter() - t0) * 1000
         block = next(b for b in resp.content if b.type == "tool_use")
-        return _parse(dict(block.input), state, self.name, latency, resp.usage.input_tokens, resp.usage.output_tokens,
-                      self.model)
+        d = _parse(dict(block.input), state, self.name, latency, resp.usage.input_tokens, resp.usage.output_tokens,
+                   self.model)
+        d["trace"] = {"system": system, "messages": messages, "raw": dict(block.input)}   # app/telemetry.py
+        return d
 
 
 def _compat_tool() -> dict:
@@ -284,8 +287,10 @@ class OpenAICompatEngine:
             raise ValueError("model returned no agent_turn tool call")
         out = json.loads(calls[0].function.arguments)
         usage = resp.usage
-        return _parse(out, state, self.name, latency,
-                      usage.prompt_tokens if usage else 0, usage.completion_tokens if usage else 0, model)
+        d = _parse(out, state, self.name, latency,
+                   usage.prompt_tokens if usage else 0, usage.completion_tokens if usage else 0, model)
+        d["trace"] = {"system": messages[0]["content"], "messages": messages[1:], "raw": out}   # app/telemetry.py
+        return d
 
 
 def provider() -> str | None:

@@ -167,8 +167,8 @@ async function openTicket(id) {
       <dt>CSP</dt><dd>${esc(t.csp_name || "Unknown")} (${t.csp_code || "–"}) · ${esc(t.shop_name || "")}</dd>
       <dt>Phone</dt><dd>${t.csp_phone ? `<a href="tel:${t.csp_phone}">${t.csp_phone}</a>` : "–"}</dd>
       <dt>Agent's category</dt><dd>${catChip(t.category)}</dd>
-      <dt>Summary</dt><dd>${esc(t.summary)}</dd>
-      ${Object.entries(t.details).map(([k, v]) => `<dt>${esc(CONFIG.slot_labels[k] || k)}</dt><dd>${esc(v)}</dd>`).join("")}
+      <dt>Summary</dt><dd><textarea id="dSummary" rows="3" style="width:100%">${esc(t.summary || "")}</textarea></dd>
+      ${detailKeys(t).map(k => `<dt>${esc(CONFIG.slot_labels[k] || k)}</dt><dd><input data-slot="${esc(k)}" value="${esc(t.details[k] || "")}" placeholder="not captured" style="width:100%"></dd>`).join("")}
       <dt>Details captured</dt><dd>${Math.round((t.slot_completeness ?? 0) * 100)}%</dd>
       <dt>Created</dt><dd>${fmtTime(t.created_at)} · SLA ${slaText(t)}</dd>
       ${t.closed_at ? `<dt>Closed</dt><dd>${fmtTime(t.closed_at)}</dd>` : ""}
@@ -180,7 +180,7 @@ async function openTicket(id) {
     </div>
     <textarea id="dNote" rows="2" placeholder="Add a note (optional)" style="width:100%;margin-top:8px"></textarea>
     <button style="margin-top:8px" onclick="saveTicket(${t.id})">Save</button>
-    <p class="small muted">Confirming the category trains the model metrics (intent accuracy).</p>
+    <p class="small muted">Fix the summary, details or category right here if the agent got them wrong. Every fix is kept and shows how well the agent is doing.</p>
     <h3 style="margin-top:18px">Call transcript</h3>
     ${t.transcript.map(m => `<div class="bubble ${m.role}">${esc(m.text)}${m.stt_confidence != null ? `<div class="meta">speech conf ${Math.round(m.stt_confidence * 100)}%</div>` : ""}</div>`).join("") || '<div class="muted">No transcript</div>'}
     <h3 style="margin-top:18px">History</h3>
@@ -188,8 +188,15 @@ async function openTicket(id) {
   $("drawer").classList.add("open"); $("drawerBg").classList.add("open");
 }
 function closeDrawer() { $("drawer").classList.remove("open"); $("drawerBg").classList.remove("open"); }
+// The details the agent captured, plus any the category needs that it missed
+function detailKeys(t) {
+  return [...new Set([...Object.keys(t.details), ...((CONFIG.categories[t.rm_category || t.category] || {}).slots || [])])];
+}
 async function saveTicket(id) {
-  await api(`api/tickets/${id}`, { method: "PATCH", body: { status: $("dStatus").value, rm_category: $("dCat").value, note: $("dNote").value || null } });
+  const details = {};
+  document.querySelectorAll("#drawer [data-slot]").forEach(i => { if (i.value.trim()) details[i.dataset.slot] = i.value.trim(); });
+  await api(`api/tickets/${id}`, { method: "PATCH", body: { status: $("dStatus").value, rm_category: $("dCat").value, note: $("dNote").value || null,
+    summary: $("dSummary").value, details } });
   await openTicket(id); refresh();
 }
 </script>

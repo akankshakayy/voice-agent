@@ -51,6 +51,22 @@
   .report ul { margin: 4px 0; padding-left: 20px; } .report li { margin: 3px 0; } .report p { margin: 6px 0; }
   .report-meta { font-size: 12px; color: var(--muted); margin-top: -4px; }
   .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+  .sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 18px; }
+  .sec-head h3 { margin: 0; }
+  .sec-head button { padding: 4px 10px; font-size: 12.5px; }
+  .edit-l { display: grid; gap: 4px; font-size: 12px; color: var(--muted); margin: 8px 0; }
+  .edit-l textarea { width: 100%; box-sizing: border-box; font-size: 13.5px; line-height: 1.5; resize: vertical; }
+  .note.fixed { background: color-mix(in srgb, var(--ok) 10%, var(--panel)); }
+  .note .linkish { background: none; border: 0; box-shadow: none; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; text-decoration: underline; }
+  .line.editing { grid-template-columns: 52px 110px 1fr 28px; background: var(--panel-2); }
+  .line.editing .whosel { display: grid; gap: 4px; }
+  .line.editing select { padding: 3px 4px; font-size: 12px; }
+  .line.editing textarea { width: 100%; box-sizing: border-box; padding: 4px 8px; font-size: 13.5px; line-height: 1.45; resize: vertical; min-height: 34px; }
+  .line.editing .del { padding: 2px 6px; background: none; border: 0; box-shadow: none; color: var(--muted); cursor: pointer; font-size: 15px; }
+  .line.editing .del:hover { color: var(--bad); }
+  .line.removed { opacity: .45; } .line.removed textarea { text-decoration: line-through; }
+  .line .heard { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .edit-bar { position: sticky; bottom: 0; display: flex; gap: 8px; align-items: center; padding: 10px 0; background: var(--panel); border-top: 1px solid var(--border); margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -107,7 +123,7 @@ function whoLabel(l, r) {
   if (n) return `Speaker ${n}${role ? `<small>${role}</small>` : ""}`;
   return SPEAKER[l.speaker] || "?";
 }
-let ROWS = [], RMS = [], OPEN = null, STAFF = false;
+let ROWS = [], RMS = [], OPEN = null, STAFF = false, EDITING = false;
 
 const statusBadge = r => r.status === "new" && r.attempts ? `<span class="badge b-warn">Retrying</span>` : badge(REC_STATUS, r.status);
 const who = r => r.csp_name ? esc(r.csp_name) : r.other_number ? esc(r.other_number) : `<span class="muted">Unknown number</span>`;
@@ -151,7 +167,7 @@ async function refresh() {
   ].map(([l, v, s, t]) => `<div class="kpi" style="--tone:var(${t})"><div class="label">${l}</div><div class="value">${num(v)}</div><div class="sub">${s}</div></div>`).join("");
   $("updated").textContent = "updated " + new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
   render();
-  if (OPEN) {
+  if (OPEN && !EDITING) {
     const r = ROWS.find(x => x.id === OPEN.id);
     if (r && r.status !== OPEN.status) openRec(OPEN.id);         // finished processing while open
     else if (OPEN.status === "done" && !OPEN.report_md && !OPEN.report_error && OPEN.transcript?.length) openRec(OPEN.id);
@@ -180,8 +196,12 @@ function render() {
 async function openRec(id) {
   let r;
   try { r = await api(`api/recordings/${id}`); } catch (e) { return; }
-  OPEN = r;
+  OPEN = r; EDITING = false;
   history.replaceState(null, "", "#" + id);
+  const canEdit = r.status === "done" && r.transcript?.length;
+  const sumFixed = r.agent_summary != null || r.agent_report_md != null;
+  // The transcript was corrected after the summary was written: the summary may repeat what was misheard
+  const stale = r.report_md && r.transcript_edited_at && r.transcript_edited_at > (r.report_at || 0);
   const res = RESOLUTION[r.resolution], mood = MOOD[r.sentiment];
   const lines = r.transcript || [];
   const slots = Object.entries(r.slots || {});
@@ -200,12 +220,17 @@ async function openRec(id) {
       <a href="api/recordings/${r.id}/download/report.docx" download>⬇ Word document (summary + transcript)</a>
       <a href="api/recordings/${r.id}/download/transcript.txt" download>⬇ Transcript (.txt)</a>
       ${r.report_md ? `<a href="api/recordings/${r.id}/download/summary.md" download>⬇ Summary (.md)</a>` : ""}</div>` : ""}
-    ${r.report_md ? `<h3>Detailed summary</h3>
+    <div id="summaryBox">${r.report_md ? `<div class="sec-head"><h3>Detailed summary</h3>
+        ${canEdit ? `<button class="secondary" onclick="editSummary()">✎ Correct summary</button>` : ""}</div>
       <p class="report-meta">Written from the whole transcript${r.report_s != null ? ` in ${secs(r.report_s)}` : ""}${r.report_model ? ` · ${esc(r.report_model)}` : ""}. Times in [brackets] point to the transcript below.</p>
-      <div class="report">${mdHtml(r.report_md)}</div>`
+      ${sumFixed ? fixedNote(r, "summary") : ""}
+      ${stale ? `<div class="note">The transcript was corrected after this summary was written.
+        <button class="linkish" onclick="resummarize(${r.id})">Write the summary again from the corrected transcript</button></div>` : ""}
+      <div class="report" id="report">${mdHtml(r.report_md)}</div>`
       : r.report_error ? `<div class="note bad">The summary couldn't be written: ${esc(r.report_error)}</div>`
       : r.status === "done" && r.transcript?.length ? `<div class="note">Writing the detailed summary… This page updates by itself.</div>`
-      : r.summary ? `<h3>Summary</h3><p>${esc(r.summary)}</p>` : ""}
+      : r.summary ? `<div class="sec-head"><h3>Summary</h3>${canEdit ? `<button class="secondary" onclick="editSummary()">✎ Correct summary</button>` : ""}</div>
+        ${sumFixed ? fixedNote(r, "summary") : ""}<p>${esc(r.summary)}</p>` : ""}</div>
     ${r.rm_handling ? `<h3>How the RM handled it</h3><p>${esc(r.rm_handling)}</p>` : ""}
     <dl class="kv">
       ${slots.map(([k, v]) => `<dt>${esc(CONFIG.slot_labels[k] || k)}</dt><dd>${esc(v)}</dd>`).join("")}
@@ -217,12 +242,14 @@ async function openRec(id) {
       ${r.timing ? `<dt>Time taken</dt><dd>${timingHtml(r.timing)}</dd>` : ""}
       ${r.timing?.stt ? `<dt>Transcribed by</dt><dd>${esc(r.timing.stt)}</dd>` : ""}
     </dl>
-    ${lines.length ? `<h3 style="margin-top:18px">Transcript</h3>
-      <p class="small muted" style="margin-top:-4px">Click a time to play from there. Personal numbers (Aadhaar, phone, OTP…) are hidden.${r.issue_segment >= 0 ? " The orange line is where the CSP explains the problem." : ""}</p>
+    ${lines.length ? `<div class="sec-head"><h3>Transcript</h3>
+        ${canEdit ? `<button class="secondary" onclick="editTranscript()">✎ Correct transcript</button>` : ""}</div>
+      ${r.transcript_edited_at ? fixedNote(r, "transcript") : ""}
+      <p class="small muted" style="margin-top:4px">Click a time to play from there. Personal numbers (Aadhaar, phone, OTP…) are hidden.${r.issue_segment >= 0 ? " The orange line is where the CSP explains the problem." : ""}</p>
       ${lines.some(l => l.voice) ? `<p class="small muted" style="margin-top:-4px">Speakers are told apart by their voices: ${[...new Set(lines.map(l => l.voice).filter(Boolean))].length} found.</p>` : ""}
       <div class="lines" id="lines">${lines.map((l, i) => `<div class="line ${esc(l.speaker || "unknown")} ${i === r.issue_segment ? "issue" : ""}" data-v="${voiceNo(l) || ""}" data-s="${l.start}" data-e="${l.end}">
         <button class="t" onclick="seek(${l.start})" aria-label="Play from ${clock(l.start)}">${clock(l.start)}</button>
-        <span class="who">${whoLabel(l, r)}</span><span>${esc(l.text)}</span></div>`).join("")}</div>`
+        <span class="who">${whoLabel(l, r)}</span><span>${esc(l.text)}${l.heard != null && SHOW_HEARD ? `<span class="heard">Heard: ${esc(l.heard)}</span>` : ""}</span></div>`).join("")}</div>`
       : r.status === "done" ? `<p class="muted">No speech was found in this recording.</p>` : ""}
     ${STAFF ? `<div class="acts"><button class="secondary" onclick="reprocess(${r.id})">Process again</button>
       ${r.transcript?.length ? `<button class="secondary" onclick="resummarize(${r.id})">Write summary again</button>` : ""}
@@ -257,16 +284,97 @@ function timingHtml(t) {
     + step("Summary and review", t.review_s, false);
 }
 
+// ---- a person's corrections: saved with the machine's version beside them, to measure and train on
+let SHOW_HEARD = false;
+const errText = e => { try { return JSON.parse(e.message.replace(/^\d+ /, "")).detail || e.message; } catch (_) { return e.message; } };
+function fixedNote(r, what) {
+  const n = what === "transcript" ? (r.transcript || []).filter(l => l.heard != null).length : 0;
+  return `<div class="note fixed">Corrected by ${esc(r.edited_by || "someone")} · ${fmtTime(r.edited_at)}.
+    ${what === "transcript" && n ? `${n} line${n > 1 ? "s" : ""} changed. <button class="linkish" onclick="SHOW_HEARD = !SHOW_HEARD; openRec(${r.id})">${SHOW_HEARD ? "Hide" : "Show"} what speech-to-text heard</button>` : ""}
+    ${what === "summary" ? `<button class="linkish" onclick="showAgentSummary()">Show the AI's version</button>` : ""}</div>`;
+}
+function showAgentSummary() {
+  const r = OPEN, w = window.open("", "_blank");
+  if (!w) return;
+  w.document.title = "AI's summary";
+  w.document.body.innerHTML = `<pre style="white-space:pre-wrap;font:14px/1.5 system-ui;max-width:800px;margin:24px auto"></pre>`;
+  w.document.querySelector("pre").textContent = `One-line summary:\n${r.agent_summary ?? r.summary ?? ""}\n\nDetailed summary:\n${r.agent_report_md ?? r.report_md ?? ""}`;
+}
+function editSummary() {
+  EDITING = true;
+  $("summaryBox").innerHTML = `<div class="sec-head"><h3>Correct the summary</h3></div>
+    <p class="small muted">Fix anything the AI got wrong. Your version is shown and downloaded from now on; the AI's is kept to learn from.</p>
+    <label class="edit-l">One-line summary (shown in the list of calls)<textarea id="eSum" rows="2"></textarea></label>
+    ${OPEN.report_md ? `<label class="edit-l">Detailed summary (## heading, - bullet, **bold**)<textarea id="eReport" rows="20"></textarea></label>` : ""}
+    <div class="acts" style="margin-top:6px"><button onclick="saveSummary()">Save corrections</button>
+      <button class="secondary" onclick="openRec(OPEN.id)">Cancel</button></div>`;
+  $("eSum").value = OPEN.summary || "";
+  if ($("eReport")) $("eReport").value = OPEN.report_md || "";
+  $("eSum").focus();
+}
+async function saveSummary() {
+  const body = { summary: $("eSum").value };
+  if ($("eReport")) body.report_md = $("eReport").value;
+  await saveEdits(body);
+}
+function editTranscript() {
+  EDITING = true;
+  const r = OPEN, voices = [...new Set(r.transcript.map(l => l.voice).filter(Boolean))].sort();
+  const roles = r.is_csp_call !== 0;
+  $("lines").innerHTML = r.transcript.map((l, i) => `<div class="line editing" data-i="${i}">
+      <button class="t" onclick="seek(${l.start})" aria-label="Play from ${clock(l.start)}">${clock(l.start)}</button>
+      <span class="whosel">
+        ${voices.length ? `<select class="ev" aria-label="Voice">${voices.map(v => `<option value="${v}" ${v === l.voice ? "selected" : ""}>Speaker ${voiceNo({ voice: v })}</option>`).join("")}</select>` : ""}
+        ${roles || !voices.length ? `<select class="es" aria-label="Who spoke">${Object.entries(SPEAKER).map(([k, v]) => `<option value="${k}" ${k === (l.speaker || "unknown") ? "selected" : ""}>${v === "?" ? "Not sure" : v}</option>`).join("")}</select>` : ""}
+      </span>
+      <textarea class="et" rows="1" aria-label="Line at ${clock(l.start)}"></textarea>
+      <button class="del" title="Remove this line (e.g. nobody said it)" onclick="toggleLine(this)">✕</button></div>`).join("")
+    + `<div class="edit-bar"><button onclick="saveTranscript()">Save corrections</button>
+      <button class="secondary" onclick="openRec(OPEN.id)">Cancel</button>
+      <span class="small muted">Play a line with its time, fix the words or the speaker. ✕ removes a line nobody said.</span></div>`;
+  document.querySelectorAll("#lines .line.editing").forEach(el => {
+    const ta = el.querySelector(".et");
+    ta.value = r.transcript[+el.dataset.i].text;
+    const fit = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + 2 + "px"; };
+    ta.oninput = fit; fit();
+  });
+}
+function toggleLine(btn) {
+  const el = btn.closest(".line"), gone = el.classList.toggle("removed");
+  el.querySelector(".et").disabled = gone;
+  btn.textContent = gone ? "↺" : "✕"; btn.title = gone ? "Keep this line" : "Remove this line (e.g. nobody said it)";
+}
+async function saveTranscript() {
+  const lines = [...document.querySelectorAll("#lines .line.editing:not(.removed)")].map(el => ({
+    i: +el.dataset.i, text: el.querySelector(".et").value,
+    speaker: el.querySelector(".es")?.value, voice: el.querySelector(".ev")?.value }));
+  const removed = document.querySelectorAll("#lines .line.removed").length;
+  if (removed && !confirm(`Remove ${removed} line${removed > 1 ? "s" : ""} from the transcript?`)) return;
+  await saveEdits({ lines });
+}
+async function saveEdits(body) {
+  try {
+    const res = await api(`api/recordings/${OPEN.id}`, { method: "PATCH", body });
+    toast(res.changed ? "Corrections saved" : "Nothing changed");
+    EDITING = false; await openRec(OPEN.id); refresh();
+  } catch (e) { toast(errText(e)); }
+}
+
 function seek(t) { const p = $("player"); p.currentTime = t; p.play().catch(() => {}); }
 function closeDrawer() {
+  if (EDITING && !confirm("Close without saving your corrections?")) return;
+  EDITING = false;
   $("drawer").classList.remove("open"); $("drawerBg").classList.remove("open");
   $("player")?.pause(); OPEN = null; history.replaceState(null, "", location.pathname);
 }
 async function resummarize(id) {
+  if (OPEN?.agent_report_md != null && !confirm("The summary was corrected by hand. Writing it again replaces those corrections (they stay on record). Go ahead?")) return;
   await api(`api/recordings/${id}/summarize`, { method: "POST" }); toast("Writing the summary again"); openRec(id);
-  setTimeout(() => OPEN?.id === id && openRec(id), 15000);
+  setTimeout(() => OPEN?.id === id && !EDITING && openRec(id), 15000);
 }
-async function reprocess(id) { await api(`api/recordings/${id}/reprocess`, { method: "POST" }); toast("Processing again"); await refresh(); openRec(id); }
+async function reprocess(id) {
+  if (OPEN?.transcript_edited_at && !confirm("Your transcript corrections are kept: the issue type, details and summaries are worked out again from the corrected text. Go ahead?")) return;
+  await api(`api/recordings/${id}/reprocess`, { method: "POST" }); toast("Processing again"); await refresh(); openRec(id); }
 async function removeRec(id) {
   if (!confirm("Delete this recording and its transcript for good?")) return;
   await api(`api/recordings/${id}`, { method: "DELETE" }); closeDrawer(); toast("Recording deleted"); refresh();

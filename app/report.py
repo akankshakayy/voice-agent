@@ -210,7 +210,7 @@ def make_summary(rec_id: int) -> dict:
     t0 = time.perf_counter()
     try:
         md, model = summarize(rec)
-        db.update("recordings", rec_id, report_md=md, report_error=None, report_at=time.time(),
+        db.update("recordings", rec_id, report_md=md, agent_report_md=None, report_error=None, report_at=time.time(),
                   report_s=round(time.perf_counter() - t0, 1), report_model=model)
     except Exception as e:
         db.update("recordings", rec_id, report_error=f"{type(e).__name__}: {e}"[:400])

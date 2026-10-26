@@ -89,6 +89,44 @@ def test_rm_closes_ticket_and_metrics_reflect_it():
     assert mm["intent"]["labelled_tickets"] == 1
 
 
+def test_every_engine_turn_is_traced():
+    from app import telemetry
+    r = talk([("Mera DMT transfer fail ho gaya", .9), ("TXN123456789", .9)])
+    telemetry.flush()
+    tr = telemetry.traces_for_call(r["call_id"])
+    assert len(tr) == 2 and all(t["turn_id"] for t in tr)
+    assert tr[0]["engine"] == "rules" and tr[0]["prompt_version"] == "rules"
+    assert tr[0]["context"]["csp"]["csp_code"] and tr[1]["context"]["slots_before"]
+    assert tr[0]["output"]["intent"] == "dmt_failed"
+
+
+def test_rm_fixes_become_corrections_and_metrics():
+    from app import agent, db, metrics, telemetry
+    a = talk([("Mera DMT transfer fail ho gaya", .9), ("TXN123456789", .9), ("5000 rupaye", .9), ("kal", .9),
+              ("haan ji kar dijiye", .9)])["ticket"]
+    b = talk([("Mujhe RM se baat karni hai", .9)])["ticket"]
+    telemetry.flush()
+    # a: the RM only closes it -> accepted as-is. b: the RM rewrites the summary and fixes the amount
+    agent.update_ticket(a["id"], "Asha", status="closed", rm_category=a["category"],
+                        summary=a["summary"], details=json.loads(a["details_json"]))
+    agent.update_ticket(b["id"], "Asha", status="closed", rm_category="general_query",
+                        summary="CSP wants a call back about commission", details={"amount": "1200"})
+    t = db.q("SELECT * FROM tickets WHERE id=?", (b["id"],), one=True)
+    assert t["agent_summary"] == b["summary"] and t["summary"].startswith("CSP wants") and t["reviewed_by"] == "Asha"
+    fields = {c["field"] for c in db.q("SELECT field FROM corrections WHERE ref_id=?", (b["id"],))}
+    assert {"summary", "detail:amount"} <= fields
+    assert not db.q("SELECT 1 FROM corrections WHERE ref_id=?", (a["id"],))
+    f = metrics.feedback_metrics(24)
+    assert f["reviewed"] == 2 and f["acceptance_pct"] == 50.0 and 0 < f["correction_delta_pct"] < 100
+    assert f["fields_changed"]["summary"] == 1 and f["biggest_corrections"]
+
+
+def test_edit_distance():
+    from app.telemetry import edit_distance, delta
+    assert edit_distance("kitten", "sitting") == 3 and edit_distance("", "abc") == 3
+    assert delta("same", "same") == 0 and delta("", "x") == 1
+
+
 def test_claude_failure_falls_back_to_rules(monkeypatch):
     from app import agent
 
@@ -150,6 +188,7 @@ def test_claude_engine_parsing_with_mock_client():
     assert msgs[0]["role"] == "user" and msgs[-1]["role"] == "user"
     assert all(msgs[i]["role"] != msgs[i + 1]["role"] for i in range(len(msgs) - 1))
     assert captured["tool_choice"] == {"type": "tool", "name": "agent_turn"}
+    assert d["trace"]["system"] == captured["system"] and d["trace"]["raw"]["intent"] == "dmt_failed"
 
 
 def test_openai_compat_engine_parsing_with_mock_client():
@@ -1647,3 +1686,68 @@ def test_google_takes_over_an_unconfirmed_account_safely(monkeypatch):
     assert attacker.get("/api/auth/me").status_code == 401                 # the attacker's session is gone
     r = TestClient(app).post("/api/auth/login", json={"email": "victim@eko.test", "password": "attacker knows this"})
     assert r.status_code == 401                                          # and so is their password
+
+
+def _done_recording(rm_id=1):
+    from app import db
+    lines = [{"start": 0.0, "end": 2.0, "text": "हेलो सर", "speaker": "rm", "voice": "A"},
+             {"start": 2.0, "end": 5.0, "text": "Thanks for watching", "speaker": "csp", "voice": "B"},
+             {"start": 5.0, "end": 9.0, "text": "मेरा डीएमटी फेल हो गया 5000 का", "speaker": "csp", "voice": "B"}]
+    return db.x("""INSERT INTO recordings(rm_id, file_path, status, attempts, uploaded_at, is_csp_call, issue_segment,
+                   transcript_json, summary, report_md) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (rm_id, "x.m4a", "done", 1, time.time(), 1, 2, json.dumps(lines, ensure_ascii=False),
+                 "CSP's AEPS failed", "## In short\nAEPS failed"))
+
+
+def test_corrected_transcript_and_summary_keep_the_machine_version():
+    from app import db, recordings
+    rid = _done_recording()
+    res = recordings.save_edits(rid, "Asha", lines=[
+        {"i": 0, "text": "हेलो सर", "speaker": "rm", "voice": "A"},
+        {"i": 2, "text": "मेरा DMT fail हो गया 5000 का, आधार 1234 5678 9012", "speaker": "csp", "voice": "B"}],
+        summary="CSP's DMT of 5000 failed", report_md="## In short\nDMT failed")
+    r = recordings.get_recording(rid)
+    assert [l["text"][:4] for l in r["transcript"]] == ["हेलो", "मेरा"]        # the made-up line is gone
+    assert r["transcript"][1]["heard"] == "मेरा डीएमटी फेल हो गया 5000 का"     # what speech-to-text heard
+    assert "[AADHAAR]" in r["transcript"][1]["text"] and "1234" not in r["transcript"][1]["text"]
+    assert r["issue_segment"] == 1 and r["transcript_edited_at"] and r["edited_by"] == "Asha"
+    assert r["summary"].startswith("CSP's DMT") and r["agent_summary"] == "CSP's AEPS failed"
+    assert r["agent_report_md"] == "## In short\nAEPS failed"
+    fields = [c["field"] for c in db.q("SELECT field FROM corrections WHERE source='recording' AND ref_id=?", (rid,))]
+    assert sorted(fields) == ["report", "summary", "transcript", "transcript"] and res["changed"] == 4
+    # A second correction keeps the machine's first version, not the person's previous one
+    recordings.save_edits(rid, "Asha", summary="CSP's DMT of ₹5000 failed")
+    assert recordings.get_recording(rid)["agent_summary"] == "CSP's AEPS failed"
+    with pytest.raises(ValueError):
+        recordings.save_edits(rid, "Asha", lines=[{"i": 5, "text": "x"}])
+
+
+def test_processing_again_reviews_the_corrected_transcript(monkeypatch):
+    from app import llm_engine, recordings
+    rid = _done_recording()
+    recordings.save_edits(rid, "Asha", lines=[{"i": 0, "text": "हेलो सर", "speaker": "rm"},
+                                              {"i": 2, "text": "मेरा DMT fail हो गया", "speaker": "rm"}],
+                          summary="by hand")
+    seen = {}
+    monkeypatch.setattr(recordings, "_transcribe", lambda *a: pytest.fail("transcribed over the corrections"))
+    monkeypatch.setattr(llm_engine, "provider", lambda: "test")
+    monkeypatch.setattr(recordings, "_write_summary", lambda rid: None)
+    monkeypatch.setattr(recordings, "review_call", lambda segs: (seen.setdefault("segs", segs) and
+                        {"speakers": ["csp", "csp"], "is_csp_call": True, "summary": "DMT failed"}, "m"))
+    recordings.process_one(recordings.db.q("SELECT * FROM recordings WHERE id=?", (rid,), one=True))
+    r = recordings.get_recording(rid)
+    assert [s["text"] for s in seen["segs"]][1] == "मेरा DMT fail हो गया"
+    assert [l["speaker"] for l in r["transcript"]] == ["rm", "rm"]      # the person's speakers, not the review's
+    assert r["summary"] == "DMT failed" and r["agent_summary"] is None
+
+
+def test_rm_corrects_only_their_own_recordings():
+    admin = _client()
+    mine, theirs = _done_recording(rm_id=2), _done_recording(rm_id=1)
+    rm2, uid = _second_user(rm_id=2)
+    assert admin.patch(f"/api/users/{uid}", json={"role": "rm", "rm_id": 2}).status_code == 200
+    assert rm2.patch(f"/api/recordings/{theirs}", json={"summary": "x"}).status_code == 404
+    r = rm2.patch(f"/api/recordings/{mine}", json={"summary": "CSP's DMT failed"})
+    assert r.status_code == 200 and r.json()["changed"] == 1
+    assert admin.get(f"/api/recordings/{mine}").json()["edited_by"] == "Second"
+    assert rm2.patch(f"/api/recordings/{mine}", json={"lines": [{"i": 0, "text": "  "}]}).status_code == 400

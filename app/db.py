@@ -113,6 +113,22 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (   -- outbox: one row per event p
     attempts INTEGER DEFAULT 0, next_attempt_at REAL, last_status_code INTEGER, last_error TEXT,
     created_at REAL, delivered_at REAL
 );
+CREATE TABLE IF NOT EXISTS traces (           -- every engine decision, frozen as it happened (app/telemetry.py)
+    id INTEGER PRIMARY KEY, call_id INTEGER, turn_id INTEGER, ts REAL, engine TEXT, model TEXT,
+    prompt_version TEXT,       -- fingerprint of the prompt code; metrics are split by it
+    system_prompt TEXT, messages_json TEXT,
+    context_json TEXT,         -- the CSP data, past tickets and slots put into the prompt
+    raw_output_json TEXT,      -- the model's tool call exactly as returned
+    output_json TEXT,          -- the decision after cleaning (slots mapped, IDs joined)
+    latency_ms REAL, input_tokens INTEGER, output_tokens INTEGER, error TEXT
+);
+CREATE TABLE IF NOT EXISTS corrections (      -- a person changed something the agent produced (app/telemetry.py)
+    id INTEGER PRIMARY KEY, ts REAL, source TEXT, ref_id INTEGER, call_id INTEGER,
+    field TEXT,                -- summary | category | detail:<slot>
+    before TEXT, after TEXT, distance INTEGER, delta REAL, actor TEXT, prompt_version TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_traces_call ON traces(call_id);
+CREATE INDEX IF NOT EXISTS idx_corrections_ref ON corrections(source, ref_id);
 CREATE INDEX IF NOT EXISTS idx_auth_events_email ON auth_events(email, event, ts);
 CREATE INDEX IF NOT EXISTS idx_deliveries_due ON webhook_deliveries(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status, uploaded_at);
@@ -176,6 +192,16 @@ def conn() -> sqlite3.Connection:
         _add_columns(_conn, "users", {"email_verified_at": "REAL", "password_changed_at": "REAL",
                                       "google_sub": "TEXT",               # the Google account, for Sign in with Google
                                       "must_verify": "INTEGER DEFAULT 0"})  # password signup not yet confirmed
+        # A person's corrections to a recording (app/recordings.py save_edits). agent_* hold the machine's version
+        # while a person's text is shown; NULL = the current text is the machine's own
+        _add_columns(_conn, "recordings", {"agent_summary": "TEXT", "agent_report_md": "TEXT",
+                                           "transcript_edited_at": "REAL", "edited_at": "REAL", "edited_by": "TEXT"})
+        if "agent_summary" not in {r[1] for r in _conn.execute("PRAGMA table_info(tickets)")}:
+            # The agent's own version of a ticket, kept when an RM edits it (correction delta, acceptance rate)
+            _add_columns(_conn, "tickets", {"agent_summary": "TEXT", "agent_details_json": "TEXT",
+                                            "reviewed_at": "REAL", "reviewed_by": "TEXT"})
+            _conn.execute("UPDATE tickets SET agent_summary=summary, agent_details_json=details_json")
+            _conn.commit()
         _add_columns(_conn, "sessions", {"last_seen_at": "REAL", "ip": "TEXT", "user_agent": "TEXT"})
     return _conn
 

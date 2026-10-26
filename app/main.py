@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import agent, auth, db, google_auth, integrations, mailer, metrics, recordings, report, stt, tts  # noqa: E402
+from . import agent, auth, db, google_auth, integrations, mailer, metrics, recordings, report, stt, telemetry, tts  # noqa: E402
 from .seed import seed_if_demo  # noqa: E402
 from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, MAX_MISUNDERSTOOD  # noqa
 
@@ -599,6 +599,8 @@ class TicketUpdate(BaseModel):
     status: str | None = None
     rm_category: str | None = None
     note: str | None = None
+    summary: str | None = None             # the RM's fix of the agent's summary (kept as a correction)
+    details: dict[str, str] | None = None   # the RM's fix of the details the agent captured
 
 
 @app.patch("/api/tickets/{ticket_id}", dependencies=[Depends(allow("admin", "ops", "rm"))])
@@ -611,7 +613,8 @@ def patch_ticket(ticket_id: int, body: TicketUpdate, request: Request):
     check_rm_owns(request, owner["rm_id"], "ticket")
     try:
         actor = request.state.user["name"]   # audit trail shows who changed the ticket
-        return agent.update_ticket(ticket_id, actor, body.status, body.rm_category, body.note)
+        return agent.update_ticket(ticket_id, actor, body.status, body.rm_category, body.note,
+                                   summary=body.summary, details=body.details)
     except KeyError:
         raise HTTPException(404, "ticket not found")
 
@@ -625,6 +628,17 @@ def m_agent(request: Request, hours: float = 168, rm_id: int | None = None):
 @app.get("/api/metrics/model", dependencies=[Depends(allow(*STAFF))])
 def m_model(hours: float = 168):
     return metrics.model_metrics(hours)
+
+
+@app.get("/api/metrics/feedback", dependencies=[Depends(allow(*STAFF))])
+def m_feedback(hours: float = 168):
+    return metrics.feedback_metrics(hours)
+
+
+@app.get("/api/calls/{call_id}/traces", dependencies=[Depends(allow(*STAFF))])
+def call_traces(call_id: int):
+    """What the engine saw and returned on each turn (prompt, context, raw output)."""
+    return telemetry.traces_for_call(call_id)
 
 
 # ------------------------------------------------------------------ voice
@@ -790,12 +804,28 @@ def download_recording(rec_id: int, kind: str, request: Request):
                     headers={"Content-Disposition": f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}"})
 
 
-@app.post("/api/recordings/{rec_id}/summarize", dependencies=[Depends(allow(*STAFF))])
-def summarize_recording(rec_id: int):
-    """Write the full summary again (it is written by itself after each recording is processed)."""
-    r = recordings.get_recording(rec_id)
-    if not r:
-        raise HTTPException(404, "Recording not found")
+class RecordingEditBody(BaseModel):
+    lines: list[dict] | None = None      # every line kept: {"i", "text", "speaker", "voice"}
+    summary: str | None = None
+    report_md: str | None = None
+
+
+@app.patch("/api/recordings/{rec_id}")
+def edit_recording(rec_id: int, body: RecordingEditBody, request: Request,
+                   actor=Depends(allow("admin", "ops", "rm"))):
+    """Correct the transcript or the summaries. The RM who made the call may correct their own recordings."""
+    _own_recording(request, rec_id)
+    try:
+        return recordings.save_edits(rec_id, _who(actor), body.lines, body.summary, body.report_md)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/recordings/{rec_id}/summarize", dependencies=[Depends(allow("admin", "ops", "rm"))])
+def summarize_recording(rec_id: int, request: Request):
+    """Write the full summary again (it is written by itself after each recording is processed). The RM may,
+    for their own recordings: after correcting the transcript they need a summary of the corrected text."""
+    r = _own_recording(request, rec_id)
     if not r["transcript"]:
         raise HTTPException(400, "This recording has no transcript yet")
     db.update("recordings", rec_id, report_error=None, report_at=None)

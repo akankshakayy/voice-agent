@@ -34,7 +34,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import db, diarize, integrations, llm_engine, report, sarvam, stt
+from . import db, diarize, integrations, llm_engine, report, sarvam, stt, telemetry
 from .taxonomy import CATEGORIES, SLOT_LABELS
 
 log = logging.getLogger("eko.recordings")
@@ -203,6 +203,68 @@ def delete_recording(rec_id: int) -> bool:
         pass
     db.x("DELETE FROM recordings WHERE id=?", (rec_id,))
     return True
+
+
+# ---------------------------------------------------------------- a person's corrections
+def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary: str | None = None,
+               report_md: str | None = None) -> dict:
+    """A person fixes what speech-to-text or the LLM got wrong.
+
+    lines: every line to keep, in order, as {"i": its index in the transcript now, "text", "speaker", "voice"}.
+    A line left out is removed (e.g. Whisper made it up from silence); times stay as they were. A line whose
+    text changes keeps the machine's first version in "heard", so a corrected line pairs what was heard with what
+    was said: a scorecard reference (export_candidates) and a misheard-word example. Every change is also logged
+    in corrections (source 'recording'). Fixed text is masked again, so a personal number can't be typed back in."""
+    r = db.q("SELECT status, transcript_json, issue_segment, summary, report_md, agent_summary, agent_report_md "
+             "FROM recordings WHERE id=?", (rec_id,), one=True)
+    if not r:
+        raise LookupError("Recording not found")
+    if r["status"] != "done":
+        raise ValueError("Wait until the recording is processed before correcting it")
+    fields, log_ = {}, []
+    if lines is not None:
+        old = json.loads(r["transcript_json"] or "[]")
+        idx = [l.get("i") for l in lines]
+        if any(not isinstance(i, int) or not 0 <= i < len(old) for i in idx) or idx != sorted(set(idx)):
+            raise ValueError("The transcript changed while you were editing it. Open it again")
+        new = []
+        for l in lines:
+            o = old[l["i"]]
+            text = mask(" ".join(str(l.get("text") or "").split()))
+            if not text:
+                raise ValueError(f"Line at {o['start']:.0f}s is empty: remove it instead")
+            line = {**o, "text": text}
+            if l.get("speaker") in SPEAKERS:
+                line["speaker"] = l["speaker"]
+            if o.get("voice") and re.fullmatch(r"[A-Z]", str(l.get("voice") or "")):
+                line["voice"] = l["voice"]
+            if text != o["text"]:
+                line.setdefault("heard", o["text"])
+                log_.append(("transcript", o["text"], text))
+            if line.get("speaker") != o.get("speaker") or line.get("voice") != o.get("voice"):
+                log_.append(("speaker", f"{o.get('voice') or ''} {o.get('speaker')}".strip(),
+                             f"{line.get('voice') or ''} {line.get('speaker')}".strip()))
+            new.append(line)
+        log_ += [("transcript", old[i]["text"], "") for i in sorted(set(range(len(old))) - set(idx))]
+        if new != old:
+            issue = r["issue_segment"]
+            fields.update(transcript_json=new, transcript_edited_at=time.time(),
+                          issue_segment=idx.index(issue) if issue is not None and issue in idx else -1)
+    for col, agent_col, value in (("summary", "agent_summary", summary), ("report_md", "agent_report_md", report_md)):
+        if value is None:
+            continue
+        value = mask(value.strip()) if col == "summary" else "\n".join(mask(l) for l in value.strip().splitlines())
+        if value != (r[col] or ""):
+            fields[col] = value
+            if r[agent_col] is None:
+                fields[agent_col] = r[col] or ""      # the machine's version, kept once
+            log_.append(("summary" if col == "summary" else "report", r[col], value))
+    if not fields:
+        return {"changed": 0}
+    db.update("recordings", rec_id, **fields, edited_at=time.time(), edited_by=actor)
+    for field, before, after in log_:
+        telemetry.record_correction("recording", rec_id, field, before, after, actor)
+    return {"changed": len(log_)}
 
 
 # ---------------------------------------------------------------- masking personal numbers
@@ -486,10 +548,12 @@ def _transcribe(r: dict, path: str) -> dict:
 def process_one(r: dict):
     started, t0 = time.time(), time.perf_counter()
     path = os.path.join(storage_dir(), r["file_path"])
-    cache = _transcribe(r, path)
+    # A transcript a person corrected is reviewed as it stands: transcribing again would throw their fixes away
+    corrected = json.loads(r["transcript_json"] or "[]") if r.get("transcript_edited_at") else None
+    cache = _transcribe(r, path) if corrected is None else json.loads(r.get("stt_json") or "null") or {}
     fresh_stt = cache.get("transcribe_at", 0) >= started
     t1 = time.perf_counter()
-    segs = [{**s, "text": mask(s["text"])} for s in _lines(r, path, cache)]
+    segs = corrected if corrected is not None else [{**s, "text": mask(s["text"])} for s in _lines(r, path, cache)]
     fresh_voices = cache.get("voices_at", 0) >= started
     t2 = time.perf_counter()
 
@@ -500,7 +564,8 @@ def process_one(r: dict):
                 "lines_s": round(t2 - t1, 1), "review_s": round(review_s, 1), "total_s": round(time.perf_counter() - t0, 1),
                 "stt": cache.get("stt")}
 
-    fields = {"status": "done", "processed_at": time.time(), "attempts": r["attempts"] + 1, "error": None}
+    fields = {"status": "done", "processed_at": time.time(), "attempts": r["attempts"] + 1, "error": None,
+              "agent_summary": None}
     if not segs:
         db.update("recordings", r["id"], **fields, is_csp_call=0, transcript_json=[], timing_json=timing(),
                   summary="No speech in the recording")
@@ -509,7 +574,8 @@ def process_one(r: dict):
     t3 = time.perf_counter()
     review, model = review_call(segs) if llm_engine.provider() else ({}, None)
     review_s = time.perf_counter() - t3
-    speakers = review.get("speakers") or ["unknown"] * len(segs)
+    speakers = ([s.get("speaker") or "unknown" for s in corrected] if corrected is not None
+                else review.get("speakers") or ["unknown"] * len(segs))
     db.update("recordings", r["id"], **fields, timing_json=timing(review_s),
               transcript_json=[{**s, "speaker": sp} for s, sp in zip(segs, speakers)],
               is_csp_call=None if not review else int(bool(review.get("is_csp_call"))),
@@ -649,7 +715,8 @@ def list_recordings(status: str | None = None, rm_id: int | None = None, limit: 
 def get_recording(rec_id: int) -> dict | None:
     r = db.q(f"""SELECT {LIST_COLS}, r.transcript_json, r.slots_json, r.issue_segment, r.intent_confidence, r.rm_handling,
                  r.model, r.processed_at, r.next_try_at, r.timing_json, r.report_md, r.report_error, r.report_at,
-                 r.report_s, r.report_model FROM recordings r LEFT JOIN rms m ON m.id=r.rm_id
+                 r.report_s, r.report_model, r.agent_summary, r.agent_report_md, r.transcript_edited_at, r.edited_at,
+                 r.edited_by FROM recordings r LEFT JOIN rms m ON m.id=r.rm_id
                  LEFT JOIN csps c ON c.id=r.csp_id WHERE r.id=?""", (rec_id,), one=True)
     if r:
         r["timing"] = json.loads(r.pop("timing_json") or "null")
@@ -667,8 +734,9 @@ def summary_counts(rm_id: int | None = None) -> dict:
 # ---------------------------------------------------------------- feeding the scorecard
 def export_candidates(out_csv: str | None = None, audio_dir: str | None = None, max_clip_s: float = 25) -> int:
     """Cut the CSP's opening complaint from every finished call into evals/audio/ and add a draft row to
-    evals/candidates.csv. reference_text is left empty on purpose: someone listens and writes what was
-    really said, then moves the row to cases.csv (Whisper's own text would score itself as perfect)."""
+    evals/candidates.csv. reference_text is left empty unless a person corrected the transcript (Whisper's own text
+    would score itself as perfect): someone listens, writes or checks what was really said, then moves the row to
+    cases.csv."""
     out_csv = out_csv or os.path.join(ROOT, "evals", "candidates.csv")
     audio_dir = audio_dir or os.path.join(ROOT, "evals", "audio")
     with open(os.path.join(ROOT, "evals", "cases.csv"), newline="", encoding="utf-8") as f:
@@ -700,13 +768,16 @@ def export_candidates(out_csv: str | None = None, audio_dir: str | None = None, 
         if cut.returncode != 0:
             log.warning("Couldn't cut a clip from recording %d: %s", r["id"], cut.stderr[:200])
             continue
-        heard = " ".join(s["text"] for s in segs[i:j])
+        heard = " ".join(s.get("heard", s["text"]) for s in segs[i:j])
+        # A transcript a person corrected already says what was really said: that is the reference
+        said = " ".join(s["text"] for s in segs[i:j]) if r["transcript_edited_at"] else ""
         row = dict.fromkeys(cols, "")
-        row.update(id=case_id, lang="en" if r["language"] == "en" else "hi", audio=clip,
+        row.update(id=case_id, lang="en" if r["language"] == "en" else "hi", audio=clip, reference_text=said,
                    expected_intent=r["intent"] if r["intent"] in CATEGORIES else "",
-                   notes=f"DRAFT from recorded call {r['id']}: listen and fill reference_text, expected_action and "
-                         f"details. Whisper heard: {heard} | AI review of the whole call: {r['summary']} "
-                         f"{r['slots_json'] or ''}")
+                   notes=f"DRAFT from recorded call {r['id']}: listen and "
+                         + (f"check reference_text (corrected by {r['edited_by']}), fill " if said else "fill reference_text, ")
+                         + f"expected_action and details. Whisper heard: {heard} | AI review of the whole call: "
+                         f"{r['summary']} {r['slots_json'] or ''}")
         new_rows.append(row)
     if new_rows:
         fresh = not os.path.exists(out_csv)

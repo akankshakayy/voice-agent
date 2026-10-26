@@ -1,9 +1,10 @@
 """Aggregations for the dashboards."""
+import json
 import os
 import statistics
 from collections import Counter
 
-from . import db
+from . import db, telemetry
 from .taxonomy import STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, label
 
 PRICE_IN = float(os.environ.get("LLM_PRICE_INPUT_PER_M", "1.0"))    # USD per 1M input tokens
@@ -159,3 +160,54 @@ def model_metrics(hours: float = 24 * 7):
         "errors": {"count": len(errors), "fallback_pct": _pct(len(errors), len(turns)),
                    "recent": [{"ts": e["ts"], "error": e["error"]} for e in errors[-5:]]},
     }
+
+
+def feedback_metrics(hours: float = 24 * 7):
+    """How much RMs had to change what the agent wrote (app/telemetry.py).
+
+    A ticket counts once an RM has saved it (reviewed). It is *accepted* when the RM kept the agent's
+    summary, details and category as they were. The correction delta is the edit distance between the
+    agent's text and the final text, as a share of its length (0 = untouched, 100% = rewritten)."""
+    since = db.now() - hours * 3600
+    tickets = db.q("""SELECT t.id, t.call_id, t.category, t.rm_category, t.summary, t.agent_summary, t.details_json,
+                             t.agent_details_json, t.reviewed_at FROM tickets t
+                      WHERE t.created_at>=? AND t.reviewed_at IS NOT NULL""", (since,))
+    versions = {r["call_id"]: r["prompt_version"] for r in db.q(
+        """SELECT call_id, prompt_version FROM traces WHERE id IN (SELECT MAX(id) FROM traces GROUP BY call_id)
+           AND ts>=?""", (since,))}
+    per_field = Counter()
+    rows = []
+    for t in tickets:
+        old, new = json.loads(t["agent_details_json"] or "{}"), json.loads(t["details_json"] or "{}")
+        changed = [f"detail:{k}" for k in set(old) | set(new) if str(old.get(k, "")) != str(new.get(k, ""))]
+        if t["agent_summary"] is not None and (t["summary"] or "") != (t["agent_summary"] or ""):
+            changed.append("summary")
+        if t["rm_category"] and t["rm_category"] != t["category"]:
+            changed.append("category")
+        per_field.update({"details" if f.startswith("detail:") else f for f in changed})   # tickets, not edits
+        text_before = (t["agent_summary"] or "") + "\n" + json.dumps(old, sort_keys=True, ensure_ascii=False)
+        text_after = (t["summary"] or "") + "\n" + json.dumps(new, sort_keys=True, ensure_ascii=False)
+        rows.append({"version": versions.get(t["call_id"], "unknown"), "accepted": not changed,
+                     "delta": telemetry.delta(text_before, text_after) if t["agent_summary"] is not None else 0.0,
+                     "chars": telemetry.edit_distance(text_before, text_after) if changed else 0})
+
+    def summary(rs):
+        return {"reviewed": len(rs), "acceptance_pct": _pct(sum(r["accepted"] for r in rs), len(rs)) if rs else None,
+                "correction_delta_pct": round(100 * statistics.mean(r["delta"] for r in rs), 1) if rs else None,
+                "avg_chars_changed": round(statistics.mean(r["chars"] for r in rs), 1) if rs else None}
+
+    # Tokens per call by prompt version: context-window efficiency
+    tok = db.q("""SELECT prompt_version v, COUNT(DISTINCT call_id) calls, COUNT(*) turns,
+                         SUM(COALESCE(input_tokens,0)) tin, SUM(COALESCE(output_tokens,0)) tout
+                  FROM traces WHERE ts>=? GROUP BY prompt_version""", (since,))
+    by_version = {r["v"]: {"version": r["v"], "calls": r["calls"], "turns": r["turns"],
+                           "tokens_per_call": round((r["tin"] + r["tout"]) / r["calls"]) if r["calls"] else 0,
+                           "input_tokens_per_turn": round(r["tin"] / r["turns"]) if r["turns"] else 0}
+                  for r in tok}
+    for v in {r["version"] for r in rows}:
+        by_version.setdefault(v, {"version": v})
+        by_version[v].update(summary([r for r in rows if r["version"] == v]))
+    recent = db.q("""SELECT ts, ref_id ticket_id, field, before, after, delta, actor FROM corrections
+                     WHERE source='ticket' AND ts>=? ORDER BY delta DESC, ts DESC LIMIT 10""", (since,))
+    return {**summary(rows), "fields_changed": dict(per_field), "by_prompt_version": list(by_version.values()),
+            "biggest_corrections": recent, "current_prompt_version": telemetry.prompt_version()}

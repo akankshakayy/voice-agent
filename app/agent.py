@@ -11,7 +11,7 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 
-from . import db, i18n, integrations, spoken
+from . import db, i18n, integrations, spoken, telemetry
 from .seed import csp_by_phone
 from .rules_engine import RulesEngine
 from .taxonomy import (CATEGORIES, HUMAN_REQUEST, ANGER, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN,
@@ -59,7 +59,7 @@ def _call(call_id):
 
 
 def _log_turn(call_id, role, text, ts, **kw):
-    db.x("""INSERT INTO turns(call_id,role,text,ts,stt_confidence,latency_ms,input_tokens,output_tokens,engine,
+    return db.x("""INSERT INTO turns(call_id,role,text,ts,stt_confidence,latency_ms,input_tokens,output_tokens,engine,
             intent,intent_confidence,error,model) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
          (call_id, role, text, ts, kw.get("stt_confidence"), kw.get("latency_ms"), kw.get("input_tokens"),
           kw.get("output_tokens"), kw.get("engine"), kw.get("intent"), kw.get("intent_confidence"), kw.get("error"),
@@ -209,9 +209,11 @@ def handle_turn(call_id, text, stt_confidence=None, ts=None):
     except Exception as e:  # LLM down / timeout -> rules fallback for this turn
         error = f"{type(e).__name__}: {str(e)[:150]}"
         d = _rules.decide(state, heard)
-    _log_turn(call_id, "csp", text, ts, stt_confidence=stt_confidence, latency_ms=d.get("latency_ms"),
-              input_tokens=d.get("input_tokens"), output_tokens=d.get("output_tokens"), engine=d["engine"],
-              intent=d.get("intent"), intent_confidence=d.get("intent_confidence"), error=error, model=d.get("model"))
+    turn_id = _log_turn(call_id, "csp", text, ts, stt_confidence=stt_confidence, latency_ms=d.get("latency_ms"),
+                        input_tokens=d.get("input_tokens"), output_tokens=d.get("output_tokens"), engine=d["engine"],
+                        intent=d.get("intent"), intent_confidence=d.get("intent_confidence"), error=error,
+                        model=d.get("model"))
+    telemetry.record_trace(call_id, turn_id, ts, d, heard, state, error)   # what the engine saw and said
 
     db.update("calls", call_id, intent=d.get("intent"), intent_confidence=d.get("intent_confidence"),
               language=d.get("language"), sentiment=d.get("sentiment"), slots_json=d.get("slots") or {},
@@ -359,11 +361,12 @@ def _create_ticket(call, ts, escalated, reason=None, summary=None):
     if not summary:
         details = ", ".join(f"{k}={v}" for k, v in slots.items())
         summary = f"{label(cat)}" + (f" ({details})" if details else "")
+    details = json.dumps(slots, ensure_ascii=False)
     tid = db.x("""INSERT INTO tickets(call_id,csp_id,rm_id,category,priority,status,escalated,escalation_reason,
-                  summary,details_json,slot_completeness,created_at,updated_at,sla_due_at)
-                  VALUES(?,?,?,?,?,'open',?,?,?,?,?,?,?,?)""",
+                  summary,details_json,slot_completeness,created_at,updated_at,sla_due_at,agent_summary,agent_details_json)
+                  VALUES(?,?,?,?,?,'open',?,?,?,?,?,?,?,?,?,?)""",
                (call["id"], call["csp_id"], call["rm_id"], cat, priority, 1 if escalated else 0, reason, summary,
-                json.dumps(slots, ensure_ascii=False), completeness, ts, ts, ts + sla_h * 3600))
+                details, completeness, ts, ts, ts + sla_h * 3600, summary, details))
     no = f"EKO-{datetime.fromtimestamp(ts, IST):%y%m%d}-{tid:04d}"
     db.update("tickets", tid, ticket_no=no)
     db.x("INSERT INTO ticket_events(ticket_id,ts,actor,action,note) VALUES(?,?,?,?,?)",
@@ -371,13 +374,35 @@ def _create_ticket(call, ts, escalated, reason=None, summary=None):
     return db.q("SELECT * FROM tickets WHERE id=?", (tid,), one=True)
 
 
-def update_ticket(ticket_id, actor="rm", status=None, rm_category=None, note=None, ts=None):
+def update_ticket(ticket_id, actor="rm", status=None, rm_category=None, note=None, ts=None, summary=None,
+                  details=None):
+    """An RM's save. Every save marks the ticket reviewed; edits to the agent's summary, details or
+    category are kept as corrections (the agent's own version stays in agent_summary/agent_details_json)."""
     ts = ts or db.now()
     t = db.q("SELECT * FROM tickets WHERE id=?", (ticket_id,), one=True)
     if not t:
         raise KeyError(ticket_id)
-    fields = {"updated_at": ts}
+    fields = {"updated_at": ts, "reviewed_at": ts, "reviewed_by": actor}
     changes = []
+    if summary is not None and summary.strip() and summary.strip() != (t["summary"] or ""):
+        summary = summary.strip()[:2000]
+        changes.append("summary")
+        fields["summary"] = summary
+        telemetry.record_correction("ticket", ticket_id, "summary", t["summary"], summary, actor, t["call_id"], ts)
+        db.x("INSERT INTO ticket_events(ticket_id,ts,actor,action,note) VALUES(?,?,?,?,?)",
+             (ticket_id, ts, actor, "summary_edited", None))
+    if details is not None:
+        old = json.loads(t["details_json"] or "{}")
+        new = {k: str(v).strip()[:300] for k, v in details.items() if str(k) and str(v or "").strip()}
+        edited = sorted(k for k in set(old) | set(new) if str(old.get(k, "")) != new.get(k, ""))
+        if edited:
+            changes.append("details")
+            fields["details_json"] = new
+            for k in edited:
+                telemetry.record_correction("ticket", ticket_id, f"detail:{k}", old.get(k), new.get(k), actor,
+                                            t["call_id"], ts)
+            db.x("INSERT INTO ticket_events(ticket_id,ts,actor,action,note) VALUES(?,?,?,?,?)",
+                 (ticket_id, ts, actor, "details_edited", ", ".join(edited)))
     if status and status != t["status"]:
         changes.append("status")
         fields["status"] = status
@@ -390,6 +415,9 @@ def update_ticket(ticket_id, actor="rm", status=None, rm_category=None, note=Non
     if rm_category and rm_category != t["rm_category"]:
         changes.append("rm_category")
         fields["rm_category"] = rm_category
+        if rm_category != t["category"] or (t["rm_category"] and t["rm_category"] != t["category"]):
+            telemetry.record_correction("ticket", ticket_id, "category", t["rm_category"] or t["category"],
+                                        rm_category, actor, t["call_id"], ts)
         db.x("INSERT INTO ticket_events(ticket_id,ts,actor,action,note) VALUES(?,?,?,?,?)",
              (ticket_id, ts, actor, "category_confirmed", f"{t['category']} -> {rm_category}"))
     if note:
