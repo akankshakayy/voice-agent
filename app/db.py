@@ -5,7 +5,10 @@ import sqlite3
 import threading
 import time
 
-DB_PATH = os.environ.get("EKO_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "data", "eko_agent.db"))
+# DATA_DIR: the writable, persistent folder the deploy platform gives the app (/data); everything else
+# (recordings, voice models, the sign-in secret) is kept next to the database
+DB_PATH = os.environ.get("EKO_DB_PATH") or os.path.join(
+    os.environ.get("DATA_DIR") or os.path.join(os.path.dirname(__file__), "..", "data"), "eko_agent.db")
 _lock = threading.RLock()
 
 SCHEMA = """

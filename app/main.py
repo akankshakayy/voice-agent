@@ -95,11 +95,20 @@ def is_https(request: Request) -> bool:
 
 # Redirects and page links are relative ("login", "static/..."), so Sahayak works at the top of an address
 # (localhost:8000) and under a prefix (https://indev.eko.in/rm-voice-agent) alike. Every page is one level deep.
+def route_path(request: Request) -> str:
+    """The path without the address prefix. Behind the deploy platform uvicorn runs with --root-path /rm-voice-agent
+    and the request path then starts with that prefix; the access rules below are written without it."""
+    path, root = request.url.path, (request.scope.get("root_path") or "").rstrip("/")
+    if root and (path == root or path.startswith(root + "/")):
+        return path[len(root):] or "/"
+    return path
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     """Every page and API needs a signed-in user, except the login/signup pages and static files.
     Pages are also checked against the user's role here; API routes check roles with `allow(...)`."""
-    path = request.url.path
+    path = route_path(request)
     if path in PUBLIC_PATHS or path in DEVICE_PATHS or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
     header = request.headers.get("authorization", "")
@@ -138,7 +147,7 @@ async def security_headers(request: Request, call_next):
     # Reset and verification links carry a token in the address; never pass it on to another site
     resp.headers.setdefault("Referrer-Policy", "no-referrer")
     resp.headers.setdefault("Permissions-Policy", "camera=(), geolocation=()")
-    if request.url.path.startswith("/api/"):
+    if route_path(request).startswith("/api/"):
         resp.headers.setdefault("Cache-Control", "no-store")
     if auth.COOKIE_SECURE or is_https(request):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")

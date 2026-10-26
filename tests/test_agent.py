@@ -143,6 +143,18 @@ def test_healthz_is_public():
     assert r.status_code == 200 and r.json() == {"ok": True}
 
 
+def test_public_pages_work_under_the_platform_root_path():
+    """The deploy platform starts uvicorn with --root-path /rm-voice-agent: the request path then carries the prefix."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app, root_path="/rm-voice-agent")
+    # uvicorn hands the app the full path, prefix included (the test client doesn't add it by itself)
+    assert c.get("/rm-voice-agent/healthz").status_code == 200
+    assert c.get("/rm-voice-agent/login", follow_redirects=False).status_code == 200
+    r = c.get("/rm-voice-agent/ops", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("login")
+
+
 def test_edit_distance():
     from app.telemetry import edit_distance, delta
     assert edit_distance("kitten", "sitting") == 3 and edit_distance("", "abc") == 3
