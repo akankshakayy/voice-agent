@@ -42,6 +42,13 @@
 <body>
 <header class="top" id="nav"></header>
 <main>
+  <section class="panel" id="restoreBox" style="margin-bottom:14px;--tone:var(--c3)" hidden>
+    <h2>Move data here</h2>
+    <p class="help">This site is still empty. Upload a backup from another Sahayak (on that machine: <span class="mono">python -m app.backup make</span>) to bring its accounts, CSPs, calls, tickets and recordings here. Everyone then signs in again with their password from there. This works only once, while the site is empty.</p>
+    <input type="file" id="restoreFile" accept=".gz,.tgz,application/gzip">
+    <button id="restoreBtn" style="margin-left:8px">Upload and replace</button>
+    <div class="small" id="restoreMsg" style="margin-top:8px"></div>
+  </section>
   <section class="panel" style="margin-bottom:14px;--tone:var(--c5)">
     <h2>Roles</h2>
     <div class="roles">
@@ -175,8 +182,28 @@ $("tokens").onclick = async e => {
   await loadTokens();
 };
 
+// "Move data here": only while this site is empty (app/backup.py)
+async function loadRestore() {
+  const r = await api("api/admin/restore").catch(() => ({ allowed: false }));
+  $("restoreBox").hidden = !r.allowed;
+}
+$("restoreBtn").onclick = async () => {
+  const f = $("restoreFile").files[0];
+  if (!f) { $("restoreMsg").textContent = "Pick the backup file first."; return; }
+  if (!confirm("Replace everything on this site with the backup? You'll be signed out and sign in again with your password from the backup.")) return;
+  $("restoreBtn").disabled = true; $("restoreMsg").textContent = `Uploading ${(f.size / 1e6).toFixed(1)} MB…`;
+  const fd = new FormData(); fd.append("backup_file", f);
+  const r = await fetch("api/admin/restore", { method: "POST", body: fd });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { $("restoreMsg").textContent = body.detail || `Failed (${r.status})`; $("restoreBtn").disabled = false; return; }
+  const c = body.restored;
+  $("restoreMsg").textContent = `Done: ${c.users} accounts, ${c.csps} CSPs, ${c.calls} calls, ${c.tickets} tickets, ${c.recordings} recordings. Signing you out…`;
+  setTimeout(() => location.href = "login", 2500);
+};
+
 (async () => {
   await loadMe();
+  loadRestore();
   RMS = await api("api/rms");
   $("origin").textContent = location.origin;
   $("tokrm").innerHTML = RMS.map(r => `<option value="${r.id}">${esc(r.name)} · ${esc(r.region || "")}</option>`).join("")

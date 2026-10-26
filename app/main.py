@@ -54,6 +54,22 @@ async def lifespan(_app):
 
 app = FastAPI(title="Eko RM Voice Agent", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+def _writable_tmp():
+    """Large uploads are spooled to a temp file. In a container with a read-only system disk, put those next to
+    the database (the platform's writable /data) instead of /tmp."""
+    import tempfile
+    try:
+        with tempfile.TemporaryFile():
+            return
+    except OSError:
+        tmp = os.path.join(os.path.dirname(os.path.abspath(db.DB_PATH)), "tmp")
+        os.makedirs(tmp, exist_ok=True)
+        tempfile.tempdir = tmp
+
+
+_writable_tmp()
 seed_if_demo()
 
 # ------------------------------------------------------------------ auth
@@ -438,6 +454,23 @@ def remove_user(user_id: int, actor=Depends(allow("admin"))):
     except auth.AuthError as e:
         raise HTTPException(e.status, str(e))
     return {"ok": True}
+
+
+@app.get("/api/admin/restore", dependencies=[Depends(allow("admin"))])
+def restore_allowed():
+    """Whether this site can still take another Sahayak's data (only while it's empty: app/backup.py)."""
+    from . import backup
+    return {"allowed": backup.site_is_empty()}
+
+
+@app.post("/api/admin/restore", dependencies=[Depends(allow("admin"))])
+def restore_backup(backup_file: UploadFile = File(...)):
+    """Replace this (empty) site's data with a backup made by `python -m app.backup make` on another Sahayak."""
+    from . import backup
+    try:
+        return backup.restore(backup_file.file)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/")

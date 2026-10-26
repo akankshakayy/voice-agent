@@ -1880,3 +1880,30 @@ def test_whisper_certainty_orders_the_queue():
     admin = _client()
     _done_recording()
     assert admin.get("/api/recordings/learning").json()["transcripts"]["to_check"] == 1
+
+
+def test_backup_moves_data_to_an_empty_site(tmp_path, monkeypatch):
+    import io
+    from app import auth, backup, db
+    monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "eko.test")
+    talk([("Mujhe RM se baat karni hai", .9)])
+    auth.signup("asha@eko.test", "correct horse", "Asha")
+    db.x("INSERT INTO users(email,name,role,created_at) VALUES('someone@gmail.com','Outsider','admin',1)")
+    db.x("INSERT INTO sessions(token_hash,user_id,created_at,expires_at) VALUES('x',1,1,9999999999)")
+    out = backup.make(str(tmp_path / "b.tar.gz"))
+    assert out["accounts_without_access"] == ["someone@gmail.com"]
+    calls = db.q("SELECT COUNT(*) n FROM calls", one=True)["n"]
+
+    assert not backup.site_is_empty()                      # a site with data refuses a backup
+    with open(out["file"], "rb") as f, pytest.raises(ValueError):
+        backup.restore(f)
+
+    db.reset_connection(str(tmp_path / "live" / "eko_agent.db"))   # the new, empty site
+    with pytest.raises(ValueError):
+        backup.restore(io.BytesIO(b"not a backup"))
+    with open(out["file"], "rb") as f:
+        res = backup.restore(f)
+    assert res["restored"]["calls"] == calls and res["restored"]["users"] == 2
+    assert db.q("SELECT role FROM users WHERE email='someone@gmail.com'", one=True)["role"] == "pending"
+    assert not db.q("SELECT 1 FROM sessions", one=True)
+    assert auth.login("asha@eko.test", "correct horse")
