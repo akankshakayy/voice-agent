@@ -941,10 +941,11 @@ class Simulate(BaseModel):
 
 @app.post("/api/simulate", dependencies=[Depends(allow(*STAFF))])
 def simulate(body: Simulate):
-    from .seed import has_real_data
-    from .simulator import run_live, run_backfill
-    if has_real_data():
-        raise HTTPException(409, "The simulator only runs on the demo database, never next to real CSPs")
+    from .simulator import RealDataError, run_live, run_backfill, _test_csps
+    try:
+        _test_csps()                       # test CSPs only; refuses when there are none to call
+    except RealDataError as e:
+        raise HTTPException(409, str(e))
     n = max(1, min(body.calls, 50))
     if body.live:
         threading.Thread(target=run_live, args=(n, body.engine), daemon=True).start()

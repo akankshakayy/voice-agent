@@ -1310,12 +1310,55 @@ def test_import_calling_sheet_replaces_demo_data(tmp_path):
     assert demo.execute("SELECT COUNT(*) FROM csps").fetchone()[0] == 15
 
 
-def test_simulator_refuses_to_run_next_to_real_csps(tmp_path):
-    from app import db, simulator
-    db.x("INSERT INTO csps(csp_code,name,source) VALUES('1A859999','Real Person','kb')")
-    with pytest.raises(simulator.RealDataError):
+def test_simulator_next_to_real_csps_calls_only_test_csps():
+    from app import db, simulator, synthetic
+    real = _real_csp()
+    with pytest.raises(simulator.RealDataError):                         # no test CSPs yet: nothing to call
         simulator.run_backfill(1)
-    assert _client().post("/api/simulate", json={"calls": 1, "live": False}).status_code == 409
+    c = _client()
+    assert c.post("/api/simulate", json={"calls": 1, "live": False}).status_code == 409
+    synthetic.generate(per_rm=4)
+    assert simulator.run_backfill(40, days=3)["created"] == 40
+    assert c.post("/api/simulate", json={"calls": 5, "live": False}).json()["created"] == 5
+    calls = db.q("SELECT c.*, s.source FROM calls c JOIN csps s ON s.id=c.csp_id")
+    assert len(calls) == len(db.q("SELECT 1 FROM calls")) == 45
+    assert {x["source"] for x in calls} == {"synthetic"} and all(x["simulated"] for x in calls)
+    assert not db.q("SELECT 1 FROM calls WHERE csp_id=? UNION SELECT 1 FROM tickets WHERE csp_id=?", (real, real))
+    assert not db.q("SELECT 1 FROM csps s JOIN calls c ON c.csp_id=s.id WHERE s.active=0")   # left the sheet
+
+
+def test_test_calls_show_on_the_rm_and_ops_dashboards():
+    from app import db, simulator, synthetic
+    _real_csp()
+    synthetic.generate(per_rm=4)
+    simulator.run_backfill(30, days=2)
+    c = _client()
+    m = c.get("/api/metrics/agent?hours=72").json()
+    assert m["totals"]["calls"] == 30 and m["totals"]["ended"] == 30 and sum(x["count"] for x in m["intents"]) == 30
+    assert sum(m["outcomes"].values()) == 30
+    tickets = c.get("/api/tickets").json()
+    assert tickets and len(tickets) == len(db.q("SELECT 1 FROM tickets"))
+    assert all(t["csp_code"].startswith("TST") for t in tickets)
+    rm = tickets[0]["rm_id"]                                             # one RM's dashboard: only their tickets
+    mine = c.get(f"/api/tickets?rm_id={rm}").json()
+    assert mine and {t["rm_id"] for t in mine} == {rm}
+    assert c.get(f"/api/metrics/agent?hours=72&rm_id={rm}").json()["totals"]["calls"] == \
+        len(db.q("SELECT 1 FROM calls WHERE rm_id=?", (rm,)))
+    t = c.get(f"/api/tickets/{tickets[0]['id']}").json()
+    assert t["transcript"] and t["events"]
+
+
+def test_clearing_test_calls_keeps_everything_else():
+    from app import db, simulator, synthetic
+    real = _real_csp()
+    synthetic.generate(per_rm=4)
+    simulator.run_backfill(10, days=1)
+    kept = db.x("INSERT INTO calls(direction,csp_id,rm_id,status,started_at,simulated) VALUES('inbound',?,1,'ended',?,0)",
+                (real, time.time()))
+    out = simulator.clear_tests()
+    assert out["calls_deleted"] == 10 and out["tickets_deleted"] >= 1
+    assert [r["id"] for r in db.q("SELECT id FROM calls")] == [kept]
+    assert not db.q("SELECT 1 FROM tickets UNION ALL SELECT 1 FROM turns UNION ALL SELECT 1 FROM ticket_events")
 
 
 def test_server_start_adds_demo_data_only_when_asked(monkeypatch):

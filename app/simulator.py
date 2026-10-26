@@ -1,4 +1,9 @@
-"""Synthetic CSP caller for demos and load testing.
+"""Synthetic CSP caller for demos, load testing and test calls.
+
+It only ever calls made-up CSPs: the demo CSPs on a demo database, or the test CSPs (`python -m app.synthetic`,
+codes TST..., numbers starting with 5) on a database with Eko's real CSPs. A real CSP is never picked, and
+agent.start_call refuses one anyway. Test calls are marked `simulated` (no webhook events) and show up on the
+RM and ops dashboards like any other call; `--clear` removes them again.
 
 The simulated CSP answers whatever the agent asks (it reads the agent's
 question and replies with the matching fact), so it works with both the
@@ -9,6 +14,7 @@ dashboard is a real measurement of the engine against ground truth.
 CLI:
   python -m app.simulator --backfill 120 --days 7     # history for charts
   python -m app.simulator --live 5                     # live calls you can watch
+  python -m app.simulator --clear                      # delete every test call and its ticket
 """
 import argparse
 import random
@@ -27,12 +33,16 @@ class RealDataError(RuntimeError):
     pass
 
 
-def _demo_only():
-    """Simulated calls and tickets must never be attached to real CSPs."""
-    if has_real_data():
-        raise RealDataError("This database holds real CSPs, so the simulator is off. "
-                            "Run it on the demo database: EKO_DB_PATH=data/demo.db DEMO_DATA=1")
-    seed()
+def _test_csps():
+    """The CSPs the simulator may call: never a real one (source 'kb')."""
+    if not has_real_data():
+        seed()
+        return db.q("SELECT * FROM csps WHERE source='demo'")
+    csps = db.q("SELECT * FROM csps WHERE source='synthetic' AND active=1")
+    if not csps:
+        raise RealDataError("This database holds real CSPs and no test CSPs to call. "
+                            "Make them first: python -m app.synthetic")
+    return csps
 
 
 def _txn():
@@ -112,11 +122,13 @@ def _pick():
     return R.choices(sc, weights=[s[0] for s in sc])[0]
 
 
-def play_call(ts=None, pace=None, engine="rules"):
+def play_call(ts=None, pace=None, engine="rules", csps=None):
     """Play one simulated call. ts=None -> real time. pace=(min,max) seconds between turns when live."""
+    csp = R.choice(csps or _test_csps())
+    if csp["source"] not in ("demo", "synthetic"):
+        raise RealDataError(f"{csp['csp_code']} is a real CSP")
     agent.force_engine("rules" if engine == "rules" else None)
     _, truth, direction, opener, facts, extra = _pick()
-    csp = R.choice(db.q("SELECT * FROM csps WHERE source='demo'"))
     clock = [ts]
 
     def tick():
@@ -127,9 +139,9 @@ def play_call(ts=None, pace=None, engine="rules"):
             time.sleep(R.uniform(*pace))
         return None
 
-    res = agent.start_call(direction, csp["phone"], extra.get("purpose", "support"), ts=clock[0])
+    res = agent.start_call(direction, purpose=extra.get("purpose", "support"), ts=clock[0], csp_id=csp["id"])
     cid = res["call_id"]
-    db.update("calls", cid, simulated=1)        # demo data: no webhook events
+    db.update("calls", cid, simulated=1)        # a test call: no webhook events
     used = set()
     utter, conf = opener, round(R.uniform(0.72, 0.97), 2)
     if extra.get("garbled"):
@@ -170,7 +182,7 @@ def _rm_actions(cid, truth, created_ts, now):
 
 
 def run_backfill(n=120, days=7, engine="rules"):
-    _demo_only()
+    csps = _test_csps()
     now = db.now()
     made = []
     for _ in range(n):
@@ -179,22 +191,40 @@ def run_backfill(n=120, days=7, engine="rules"):
         ts = (day + timedelta(hours=R.uniform(9, 20))).timestamp()
         if ts > now - 120:
             ts = now - R.uniform(300, 4 * 3600)
-        cid, truth = play_call(ts=ts, engine=engine)
+        cid, truth = play_call(ts=ts, engine=engine, csps=csps)
         _rm_actions(cid, truth, ts, now)
         made.append(cid)
     return {"created": len(made)}
 
 
 def run_live(n=5, engine="rules"):
-    _demo_only()
+    csps = _test_csps()
     threads = []
     for i in range(n):
-        th = threading.Thread(target=play_call, kwargs={"pace": (2.5, 5.0), "engine": engine}, daemon=True)
+        th = threading.Thread(target=play_call, kwargs={"pace": (2.5, 5.0), "engine": engine, "csps": csps},
+                              daemon=True)
         th.start()
         threads.append(th)
         time.sleep(R.uniform(1, 3))
     for th in threads:
         th.join()
+
+
+def clear_tests():
+    """Delete every test call (simulated, or with a test CSP) and what hangs off it: turns, tickets, traces."""
+    c = db.conn()
+    ids = lambda xs: ",".join(str(int(i)) for i in xs) or "NULL"
+    with db._lock, c:
+        calls = [r[0] for r in c.execute("SELECT id FROM calls WHERE simulated=1 OR csp_id IN "
+                                         "(SELECT id FROM csps WHERE source IN ('demo','synthetic'))")]
+        tickets = [r[0] for r in c.execute(f"SELECT id FROM tickets WHERE call_id IN ({ids(calls)})")]
+        c.execute(f"DELETE FROM ticket_events WHERE ticket_id IN ({ids(tickets)})")
+        c.execute(f"DELETE FROM corrections WHERE call_id IN ({ids(calls)})")
+        c.execute(f"DELETE FROM traces WHERE call_id IN ({ids(calls)})")
+        c.execute(f"DELETE FROM tickets WHERE id IN ({ids(tickets)})")
+        c.execute(f"DELETE FROM turns WHERE call_id IN ({ids(calls)})")
+        c.execute(f"DELETE FROM calls WHERE id IN ({ids(calls)})")
+    return {"calls_deleted": len(calls), "tickets_deleted": len(tickets)}
 
 
 if __name__ == "__main__":
@@ -203,7 +233,10 @@ if __name__ == "__main__":
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--live", type=int, default=0)
     ap.add_argument("--engine", default="rules", choices=["rules", "auto"])
+    ap.add_argument("--clear", action="store_true", help="delete every test call and its ticket first")
     a = ap.parse_args()
+    if a.clear:
+        print(clear_tests())
     if a.backfill:
         print(run_backfill(a.backfill, a.days, a.engine))
     if a.live:
