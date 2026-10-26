@@ -306,6 +306,40 @@ def test_login_lockout_after_repeated_failures():
     assert r.status_code == 429
 
 
+def test_wrong_tries_from_elsewhere_dont_lock_the_real_user_out():
+    from app import auth, db
+    c = _client()
+    c.post("/api/auth/logout")
+    for _ in range(auth.MAX_FAILS):
+        auth.log_event("login_failed", None, "rahul@eko.test", "203.0.113.9")     # a stranger's address
+    assert c.post("/api/auth/login", json={"email": "rahul@eko.test", "password": "correct horse"}).status_code == 200
+    c.post("/api/auth/logout")
+    for _ in range(auth.MAX_FAILS_ANY_IP):
+        auth.log_event("login_failed", None, "rahul@eko.test", "203.0.113.9")
+    assert c.post("/api/auth/login", json={"email": "rahul@eko.test", "password": "correct horse"}).status_code == 429
+    db.x("DELETE FROM auth_events WHERE ip='203.0.113.9'")
+
+
+def test_signing_in_again_replaces_the_old_session():
+    from app import auth, db
+    c = _client()
+    old = c.cookies.get(auth.COOKIE)
+    assert c.post("/api/auth/login", json={"email": "rahul@eko.test", "password": "correct horse"}).status_code == 200
+    assert c.cookies.get(auth.COOKIE) != old and auth.user_for_token(old) is None
+    assert c.get("/api/auth/me").status_code == 200
+    assert db.q("SELECT COUNT(*) n FROM sessions", one=True)["n"] == 1
+
+
+def test_session_cookie_is_secure_over_https():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    body = {"email": "rahul@eko.test", "password": "correct horse", "name": "Rahul Verma"}
+    r = TestClient(app, base_url="https://testserver").post("/api/auth/signup", json=body)
+    assert r.status_code == 200 and "secure" in r.headers["set-cookie"].lower()
+    r = TestClient(app).post("/api/auth/login", json=body)
+    assert r.status_code == 200 and "secure" not in r.headers["set-cookie"].lower()
+
+
 def test_ticket_changes_record_who_made_them():
     c = _client()
     r = c.post("/api/calls", json={"direction": "inbound", "phone": "9000000101"}).json()

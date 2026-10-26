@@ -171,6 +171,10 @@ if (MODE === "verify-email") {
     $("switch").innerHTML = `<a href="./">Continue</a>`;
   })();
 }
+// Already signed in: go straight on instead of showing the form again
+if (MODE === "login" || MODE === "signup") {
+  fetch("api/auth/me").then(r => { if (r.ok) location.replace(next); }).catch(() => {});
+}
 if (MODE === "reset" && !TOKEN) show("err", "This link is incomplete. Open it again from the email, or ask for a new one.");
 ($("nameRow").hidden ? ($("emailRow").hidden ? $("password") : $("email")) : $("name")).focus();
 

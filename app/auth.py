@@ -28,6 +28,7 @@ SESSION_IDLE_HOURS = float(os.environ.get("SESSION_IDLE_HOURS", "12"))   # signe
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "0") == "1"   # set to 1 when served over HTTPS
 MIN_PASSWORD = 10
 MAX_FAILS, LOCK_SECONDS = 5, 15 * 60
+MAX_FAILS_ANY_IP = 20            # wrong tries for one email from all addresses together
 RESET_MINUTES, VERIFY_HOURS = 30, 48
 MAX_RESETS_PER_HOUR = 3
 DEFAULT_DOMAINS = "eko.co.in,ekosupport.in"
@@ -254,18 +255,22 @@ def _admin_count() -> int:
     return db.q("SELECT COUNT(*) n FROM users WHERE role='admin'", one=True)["n"]
 
 
-def _locked(email: str) -> bool:
+def _locked(email: str, ip: str | None = None) -> bool:
+    """5 wrong tries from one address lock that address out of this account, so a stranger mistyping (or guessing)
+    someone's email can't lock the real person out. 20 from all addresses lock the account for everyone."""
     since = time.time() - LOCK_SECONDS
     last_ok = db.q("SELECT MAX(ts) t FROM auth_events WHERE email=? AND event IN ('login','password_reset')",
                    (email,), one=True)["t"] or 0
-    n = db.q("SELECT COUNT(*) n FROM auth_events WHERE email=? AND event='login_failed' AND ts>?",
-             (email, max(since, last_ok)), one=True)["n"]
-    return n >= MAX_FAILS
+    fails = "SELECT COUNT(*) n FROM auth_events WHERE email=? AND event='login_failed' AND ts>?"
+    args = (email, max(since, last_ok))
+    if db.q(fails, args, one=True)["n"] >= MAX_FAILS_ANY_IP:
+        return True
+    return db.q(fails + " AND ip IS ?", (*args, ip), one=True)["n"] >= MAX_FAILS
 
 
 def login(email: str, password: str, ip: str | None = None) -> dict:
     email = (email or "").strip().lower()[:254]
-    if _locked(email) or _ip_busy(ip, ("login_failed",), IP_FAILS, IP_FAIL_WINDOW):
+    if _locked(email, ip) or _ip_busy(ip, ("login_failed",), IP_FAILS, IP_FAIL_WINDOW):
         log_event("login_locked", email=email, ip=ip)
         raise AuthError("Too many failed attempts. Try again in 15 minutes, or reset your password.", 429)
     u = db.q("SELECT * FROM users WHERE email=?", (email,), one=True)

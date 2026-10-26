@@ -83,6 +83,14 @@ def client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def is_https(request: Request) -> bool:
+    """Opened over HTTPS (directly, or through nginx with TRUST_PROXY): the sign-in cookie is then sent only
+    over HTTPS, even if COOKIE_SECURE was left at 0."""
+    if TRUST_PROXY and request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https":
+        return True
+    return request.url.scheme == "https"
+
+
 
 
 # Redirects and page links are relative ("login", "static/..."), so Sahayak works at the top of an address
@@ -132,7 +140,7 @@ async def security_headers(request: Request, call_next):
     resp.headers.setdefault("Permissions-Policy", "camera=(), geolocation=()")
     if request.url.path.startswith("/api/"):
         resp.headers.setdefault("Cache-Control", "no-store")
-    if auth.COOKIE_SECURE:
+    if auth.COOKIE_SECURE or is_https(request):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
     return resp
 
@@ -195,14 +203,15 @@ class EmailChangeBody(BaseModel):
 
 def _signed_in(user: dict, request: Request) -> JSONResponse:
     resp = JSONResponse(auth.public_user(user))
+    auth.end_session(request.cookies.get(auth.COOKIE))   # signing in again replaces this browser's old session
     token = auth.create_session(user["id"], client_ip(request), request.headers.get("user-agent"))
-    _set_session_cookie(resp, token)
+    _set_session_cookie(resp, token, request)
     return resp
 
 
-def _set_session_cookie(resp, token: str):
+def _set_session_cookie(resp, token: str, request: Request):
     resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400,
-                    httponly=True, samesite="lax", secure=auth.COOKIE_SECURE, path=cookie_path())
+                    httponly=True, samesite="lax", secure=auth.COOKIE_SECURE or is_https(request), path=cookie_path())
 
 
 def _clear_session_cookie(resp):
@@ -233,7 +242,7 @@ def send_confirmation_again(body: LoginBody, request: Request):
 
 
 @app.get("/api/auth/google/start")
-def google_start(next: str = "./"):
+def google_start(request: Request, next: str = "./"):
     """Off to Google's sign-in page; it comes back to /api/auth/google/callback."""
     if not google_auth.configured():
         return RedirectResponse("../../../login?error=" + quote("Sign in with Google isn't set up on this server."), 303)
@@ -241,7 +250,7 @@ def google_start(next: str = "./"):
                                   auth.allowed_domains())
     resp = RedirectResponse(url, 303)
     resp.set_cookie(google_auth.COOKIE, flow, max_age=google_auth.FLOW_SECONDS, httponly=True, samesite="lax",
-                    secure=auth.COOKIE_SECURE, path=cookie_path())
+                    secure=auth.COOKIE_SECURE or is_https(request), path=cookie_path())
     return resp
 
 
@@ -259,7 +268,9 @@ def google_callback(request: Request, code: str = "", state: str = "", error: st
     else:
         nxt = who["next"]                               # checked at start: a page name, ./ or a same-site path
         resp = RedirectResponse(nxt if nxt.startswith("/") else back + nxt, 303)
-        _set_session_cookie(resp, auth.create_session(u["id"], client_ip(request), request.headers.get("user-agent")))
+        auth.end_session(request.cookies.get(auth.COOKIE))
+        _set_session_cookie(resp, auth.create_session(u["id"], client_ip(request), request.headers.get("user-agent")),
+                            request)
     resp.delete_cookie(google_auth.COOKIE, path=cookie_path())
     return resp
 
