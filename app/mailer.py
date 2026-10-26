@@ -28,9 +28,9 @@ def link(page: str, token: str) -> str:
 
 def _deliver(to: str, subject: str, text: str):
     msg = EmailMessage()
-    msg["From"], msg["To"], msg["Subject"] = os.environ["SMTP_FROM"], to, subject
+    msg["From"], msg["To"], msg["Subject"] = os.environ.get("SMTP_FROM", ""), to, subject
     msg.set_content(text)
-    host, port = os.environ["SMTP_HOST"], int(os.environ.get("SMTP_PORT", "587"))
+    host, port = os.environ.get("SMTP_HOST", ""), int(os.environ.get("SMTP_PORT", "587"))
     security = os.environ.get("SMTP_SECURITY", "starttls").lower()   # starttls | ssl | none
     ctx = ssl.create_default_context()
     smtp = smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) if security == "ssl" else \
@@ -39,7 +39,7 @@ def _deliver(to: str, subject: str, text: str):
         if security == "starttls":
             smtp.starttls(context=ctx)
         if os.environ.get("SMTP_USER"):
-            smtp.login(os.environ["SMTP_USER"], os.environ.get("SMTP_PASSWORD", ""))
+            smtp.login(os.environ.get("SMTP_USER", ""), os.environ.get("SMTP_PASSWORD", ""))
         smtp.send_message(msg)
 
 

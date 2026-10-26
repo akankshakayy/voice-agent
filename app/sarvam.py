@@ -40,7 +40,7 @@ def settings() -> str:
 
 def _client():
     import httpx
-    return httpx.Client(timeout=120, headers={"api-subscription-key": os.environ["SARVAM_API_KEY"]})
+    return httpx.Client(timeout=120, headers={"api-subscription-key": os.environ.get("SARVAM_API_KEY", "")})
 
 
 def _check(r, what: str):

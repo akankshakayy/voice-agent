@@ -73,7 +73,7 @@ def start(next_page: str, domains: list[str]) -> tuple[str, str]:
     state = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    params = {"client_id": os.environ["GOOGLE_CLIENT_ID"], "redirect_uri": redirect_uri(), "response_type": "code",
+    params = {"client_id": os.environ.get("GOOGLE_CLIENT_ID", ""), "redirect_uri": redirect_uri(), "response_type": "code",
               "scope": "openid email profile", "state": state, "code_challenge": challenge,
               "code_challenge_method": "S256", "prompt": "select_account"}
     if len(domains) == 1:
@@ -93,7 +93,7 @@ def finish(code: str, state: str, flow_cookie: str | None) -> dict:
         raise GoogleError("The sign-in took too long or was started in another browser. Try again.")
     import httpx
     tok = httpx.post(TOKEN_URL, timeout=20, data={
-        "code": code, "client_id": os.environ["GOOGLE_CLIENT_ID"], "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+        "code": code, "client_id": os.environ.get("GOOGLE_CLIENT_ID", ""), "client_secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
         "redirect_uri": redirect_uri(), "grant_type": "authorization_code", "code_verifier": flow["v"]})
     if tok.status_code != 200 or "access_token" not in tok.json():
         raise GoogleError("Google didn't confirm the sign-in. Try again.")
