@@ -137,6 +137,12 @@ def test_why_panel_explains_ticket():
     assert w["decided_by"] == "safety rule" and "RM" in w["rule"]
 
 
+def test_healthz_is_public():
+    c = _client(signed_in=False)
+    r = c.get("/healthz")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+
+
 def test_edit_distance():
     from app.telemetry import edit_distance, delta
     assert edit_distance("kitten", "sitting") == 3 and edit_distance("", "abc") == 3

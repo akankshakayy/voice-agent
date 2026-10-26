@@ -59,7 +59,7 @@ seed_if_demo()
 # ------------------------------------------------------------------ auth
 PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/favicon.ico", "/api/auth/login",
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
-                "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback"}
+                "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz"}
 PUBLIC_PREFIXES = ("/static/",)
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
@@ -278,6 +278,13 @@ def google_callback(request: Request, code: str = "", state: str = "", error: st
 @app.post("/api/auth/login")
 def login(body: LoginBody, request: Request):
     return _signed_in(_auth_call(auth.login, body.email, body.password, client_ip(request)), request)
+
+
+@app.get("/healthz")
+def healthz():
+    """For the deploy platform's health check: the app is up and its database answers. No login, no data."""
+    db.q("SELECT 1")
+    return {"ok": True}
 
 
 @app.get("/api/auth/options")
