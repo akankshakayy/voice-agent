@@ -703,6 +703,23 @@ def call_traces(call_id: int):
     return telemetry.traces_for_call(call_id)
 
 
+@app.get("/api/calls/{call_id}/evaluator", dependencies=[Depends(allow(*STAFF))])
+def call_evaluator(call_id: int):
+    """Phase 1: Evaluator scores for all traces in a call (tier breakdown, quality, etc.)."""
+    from . import evaluator
+    return {
+        "scores": evaluator.scores_for_call(call_id),
+        "tier_health": evaluator.tier_health(call_id),
+    }
+
+
+@app.get("/api/evaluator/models", dependencies=[Depends(allow(*STAFF))])
+def evaluator_models(hours: int = 24):
+    """Phase 1: Aggregate model performance (accuracy, latency, token efficiency)."""
+    from . import evaluator
+    return evaluator.model_performance(hours)
+
+
 # ------------------------------------------------------------------ voice
 class Speak(BaseModel):
     text: str

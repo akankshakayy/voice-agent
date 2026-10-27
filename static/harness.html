@@ -187,30 +187,60 @@ function renderTokenBar() {
     input: a.input + (t.input_tokens || 0),
     output: a.output + (t.output_tokens || 0)
   }), { input: 0, output: 0 });
+
+  // Aggregate tier tokens
+  const tiers = { system: 0, context: 0, history: 0, output: 0 };
+  allTraces.forEach(t => {
+    if (t.tier_tokens_json) {
+      try {
+        const tt = JSON.parse(t.tier_tokens_json);
+        Object.keys(tiers).forEach(k => tiers[k] += (tt[k] || 0));
+      } catch (e) {}
+    }
+  });
+
   totals.total = totals.input + totals.output;
   const maxTokens = 200000;
-  const pct = Math.min((totals.total / maxTokens) * 100, 100);
-  const status = pct <= 60 ? 'optimal' : pct <= 80 ? 'warning' : 'critical';
 
-  $('tokenBar').innerHTML = `
-    <div class="token-segment ${status}" style="flex: ${pct || 1}"></div>
-    <div class="token-segment" style="flex: ${Math.max(100 - pct, 0) || 1}"></div>
-  `;
+  // Tier-based bar
+  const tierTotal = Object.values(tiers).reduce((a, b) => a + b, 0);
+  if (tierTotal > 0) {
+    const tierPcts = Object.entries(tiers).map(([k, v]) => ({
+      name: k, pct: (v / tierTotal) * 100, color: k === 'system' ? '#10b981' : k === 'context' ? '#f59e0b' : k === 'history' ? '#ef4444' : '#64748b'
+    }));
+
+    $('tokenBar').innerHTML = tierPcts.map(t =>
+      `<div class="token-segment" style="flex: ${t.pct}; background: ${t.color}" title="${t.name}: ${Math.round(t.pct)}%"></div>`
+    ).join('');
+  } else {
+    const pct = Math.min((totals.total / maxTokens) * 100, 100);
+    const status = pct <= 60 ? 'optimal' : pct <= 80 ? 'warning' : 'critical';
+    $('tokenBar').innerHTML = `
+      <div class="token-segment ${status}" style="flex: ${pct || 1}"></div>
+      <div class="token-segment" style="flex: ${Math.max(100 - pct, 0) || 1}"></div>
+    `;
+  }
 
   $('tokenStats').innerHTML = `
     <div class="token-stat">
       <span class="token-stat-dot" style="background:#10b981"></span>
-      <span>Input: ${totals.input.toLocaleString()}</span>
+      <span>System: ${tiers.system.toLocaleString()}</span>
     </div>
     <div class="token-stat">
       <span class="token-stat-dot" style="background:#f59e0b"></span>
-      <span>Output: ${totals.output.toLocaleString()}</span>
+      <span>Context: ${tiers.context.toLocaleString()}</span>
     </div>
     <div class="token-stat">
       <span class="token-stat-dot" style="background:#ef4444"></span>
-      <span>Total: ${totals.total.toLocaleString()} (${Math.round(pct)}%)</span>
+      <span>History: ${tiers.history.toLocaleString()}</span>
+    </div>
+    <div class="token-stat">
+      <span class="token-stat-dot" style="background:#64748b"></span>
+      <span>Output: ${tiers.output.toLocaleString()}</span>
     </div>
   `;
+
+  const pct = Math.min((totals.total / maxTokens) * 100, 100);
   $('footerStatus').textContent = `Token usage: ${Math.round(pct)}% of ${(maxTokens/1000).toFixed(0)}k limit`;
 }
 
@@ -252,6 +282,8 @@ function renderEvaluator(trace) {
   const output = trace.output || {};
   const context = trace.context || {};
   const messages = trace.messages || [];
+  const tierTokens = trace.tier_tokens_json ? JSON.parse(trace.tier_tokens_json) : null;
+  const totalTierTokens = tierTokens ? Object.values(tierTokens).reduce((a, b) => a + b, 0) : 0;
 
   let html = `
     <div class="eval-section">
@@ -262,7 +294,27 @@ function renderEvaluator(trace) {
       <div class="eval-row"><span>Tokens (in/out)</span> <strong>${trace.input_tokens}/${trace.output_tokens}</strong></div>
       ${trace.error ? `<div class="eval-row" style="color:#ef4444;"><span>Error</span> <strong>${esc(trace.error)}</strong></div>` : ''}
     </div>
+  `;
 
+  if (tierTokens && totalTierTokens > 0) {
+    const tierPcts = Object.entries(tierTokens).map(([k, v]) => ({
+      name: k, tokens: v, pct: (v / totalTierTokens * 100).toFixed(1)
+    }));
+    html += `
+      <div class="eval-section">
+        <div class="eval-label">Token Tier Breakdown</div>
+        ${tierPcts.map(t =>
+          `<div class="eval-row"><span style="font-size:11px">${t.name.toUpperCase()}</span> <strong>${t.tokens} (${t.pct}%)</strong></div>`
+        ).join('')}
+        <div style="font-size:10px; color:var(--muted); margin-top:8px;">
+          ${tierPcts[2].pct > 50 ? '⚠️ History is >50%, consider trimming past turns' : ''}
+          ${tierPcts[1].pct > 40 ? '⚠️ Context is >40%, consider compressing CSP data' : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  html += `
     <div class="eval-section">
       <div class="eval-label">Input Context</div>
       <div class="eval-row"><span>Heard</span> <strong>${esc((context.heard || '').slice(0, 60))}</strong></div>
@@ -293,8 +345,9 @@ function renderEvaluator(trace) {
   if (trace.system_prompt) {
     html += `
       <div class="eval-section">
-        <div class="eval-label">System Prompt</div>
-        <div class="eval-code">${esc(trace.system_prompt.slice(0, 500))}</div>
+        <div class="eval-label">System Prompt (tier structure)</div>
+        <div style="font-size:10px; color:var(--muted); margin-bottom:6px;">System prompts now organized in tiers: HIGH (instructions) | MEDIUM (context) | LOW (state)</div>
+        <div class="eval-code">${esc(trace.system_prompt.slice(0, 400))}</div>
       </div>
     `;
   }

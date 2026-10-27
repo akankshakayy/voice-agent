@@ -123,7 +123,8 @@ CREATE TABLE IF NOT EXISTS traces (           -- every engine decision, frozen a
     context_json TEXT,         -- the CSP data, past tickets and slots put into the prompt
     raw_output_json TEXT,      -- the model's tool call exactly as returned
     output_json TEXT,          -- the decision after cleaning (slots mapped, IDs joined)
-    latency_ms REAL, input_tokens INTEGER, output_tokens INTEGER, error TEXT
+    latency_ms REAL, input_tokens INTEGER, output_tokens INTEGER, error TEXT,
+    tier_tokens_json TEXT      -- {"system": N, "context": N, "history": N, "output": N} for accounting
 );
 CREATE TABLE IF NOT EXISTS corrections (      -- a person changed something the agent produced (app/telemetry.py)
     id INTEGER PRIMARY KEY, ts REAL, source TEXT, ref_id INTEGER, call_id INTEGER,
@@ -216,6 +217,7 @@ def conn() -> sqlite3.Connection:
             _conn.execute("UPDATE tickets SET agent_summary=summary, agent_details_json=details_json")
             _conn.commit()
         _add_columns(_conn, "sessions", {"last_seen_at": "REAL", "ip": "TEXT", "user_agent": "TEXT"})
+        _add_columns(_conn, "traces", {"tier_tokens_json": "TEXT"})  # Phase 1: context tier accounting
     return _conn
 
 

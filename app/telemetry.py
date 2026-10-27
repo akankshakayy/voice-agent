@@ -66,13 +66,15 @@ def record_trace(call_id: int, turn_id: int | None, ts: float, decision: dict, h
         }
         output = {k: decision.get(k) for k in ("reply", "understood", "language", "intent", "intent_confidence",
                                                "slots", "sentiment", "action", "escalation_reason", "summary")}
+        tier_tokens = tr.get("tier_tokens")  # {"system": N, "context": N, "history": N, "output": N}
         row = (call_id, turn_id, ts, decision.get("engine"), decision.get("model"),
                prompt_version() if decision.get("engine") not in ("rules", None) else "rules",
                tr.get("system"), json.dumps(tr.get("messages"), ensure_ascii=False) if tr.get("messages") else None,
                json.dumps(context, ensure_ascii=False, default=str),
                json.dumps(tr.get("raw"), ensure_ascii=False, default=str) if tr.get("raw") is not None else None,
                json.dumps(output, ensure_ascii=False, default=str),
-               decision.get("latency_ms"), decision.get("input_tokens"), decision.get("output_tokens"), error)
+               decision.get("latency_ms"), decision.get("input_tokens"), decision.get("output_tokens"), error,
+               json.dumps(tier_tokens, ensure_ascii=False) if tier_tokens else None)
         _start()
         _q.put_nowait(row)
     except Exception:
@@ -94,8 +96,8 @@ def _run():
         row = _q.get()
         try:
             db.x("""INSERT INTO traces(call_id,turn_id,ts,engine,model,prompt_version,system_prompt,messages_json,
-                    context_json,raw_output_json,output_json,latency_ms,input_tokens,output_tokens,error)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
+                    context_json,raw_output_json,output_json,latency_ms,input_tokens,output_tokens,error,tier_tokens_json)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
             _purge()
         except Exception:
             pass

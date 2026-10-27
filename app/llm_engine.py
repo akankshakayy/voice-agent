@@ -11,6 +11,12 @@ import time
 from . import misheard, spoken
 from .taxonomy import CATEGORIES, SLOT_LABELS, INTENT_CONFIDENCE_MIN
 
+
+# Per-tier token accounting (estimate: ~4 chars per token)
+def _estimate_tokens(text: str) -> int:
+    """Simple token estimation: ~4 chars = 1 token. For real accounting, use tiktoken."""
+    return max(1, len(str(text)) // 4)
+
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 
 # Free OpenAI-compatible providers. Each needs only its own API key.
@@ -70,18 +76,27 @@ def _first_name(name: str | None) -> str:
     return (name or "").split()[0] if (name or "").strip() else ""
 
 
-def _system_prompt(state: dict) -> str:
+def _system_prompt(state: dict) -> tuple[str, dict]:
+    """Return (system_prompt_text, tier_tokens_dict) for token accounting.
+
+    Tier structure for context accounting:
+    - HIGH (fixed): Instructions, categories, slot definitions, language rules, style
+    - MEDIUM (variable): CSP context (tickets, name, code, RM)
+    - LOW (grows): Call history
+    - OUTPUT: Model's response size budget
+    """
     cats = "\n".join(
         f"- {k}: {v['label']} | required details: {', '.join(v['slots']) or 'none'} | priority {v['priority']}"
         + (" | ALWAYS escalate" if v.get("always_escalate") else "")
         + (" | self-serve: answer from the CSP's ticket list, action=resolved_by_agent" if v.get("self_serve") else "")
         for k, v in CATEGORIES.items())
-    csp = state.get("csp") or {}
-    tickets = state.get("csp_tickets") or []
-    tlist = "\n".join(f"  - {t['ticket_no']}: {t['category']} | status {t['status']} | {t['summary']}"
-                      for t in tickets) or "  (none)"
-    slots = {k: v for k, v in (state.get("slots") or {}).items() if not k.startswith("_")}
-    return f"""You are "Eko Sahayak", a voice assistant that answers and makes phone calls on behalf of
+
+    lang_rules = _language_rules(state.get("lang"))
+    slot_keys = ", ".join(f"{k} ({v})" for k, v in SLOT_LABELS.items())
+    misheard_hint = misheard.hint()
+
+    # TIER 1: System instructions (fixed per version)
+    tier_high = f"""You are "Eko Sahayak", a voice assistant that answers and makes phone calls on behalf of
 Eko Relationship Managers (RMs). You talk to CSPs (Customer Service Points - retailers/shopkeepers who
 offer Eko services like DMT money transfer, AePS cash withdrawal, BBPS bill payment and recharge).
 
@@ -98,30 +113,52 @@ YOUR JOB ON THIS CALL
 CATEGORIES
 {cats}
 
-DETAIL (SLOT) KEYS: {", ".join(f"{k} ({v})" for k, v in SLOT_LABELS.items())}
+DETAIL (SLOT) KEYS: {slot_keys}
 Record in `slots` EVERY detail the caller has stated anywhere in the call, starting with their very first
 message - e.g. "I deposited 10000 by NEFT, UTR 412398765432" -> amount=10000, payment_mode=NEFT,
 utr_or_ref=412398765432. Use exactly these keys with just the value. Never ask for a detail already given.
 If the CSP says they do not know a transaction ID / UTR, store "not known" and move on.
 
 STYLE: You are speaking on a phone line. Replies must be 1-2 short sentences, warm and respectful.
-{_language_rules(state.get("lang"))}
+{lang_rules}
 No markdown, lists or emojis. Never ask for OTP, PIN, password or Aadhaar number. Never promise a refund
 amount or timeline you do not know - say the RM team will check.
 Never say a ticket number yourself - when you set action=create_ticket the system reads out the real number.
 If the last message was unclear or garbled, set understood=false and politely ask them to repeat.
-{misheard.hint()}
+{misheard_hint}
+"""
 
-CALL CONTEXT
+    # TIER 2: CSP context (variable but smaller)
+    csp = state.get("csp") or {}
+    tickets = state.get("csp_tickets") or []
+    tlist = "\n".join(f"  - {t['ticket_no']}: {t['category']} | status {t['status']} | {t['summary']}"
+                      for t in tickets) or "  (none)"
+    tier_medium = f"""CALL CONTEXT
 - Direction: {state.get('direction')} | Purpose: {state.get('purpose')}
 - CSP: {_first_name(csp.get('name')) or 'UNKNOWN - ask for CSP ID'} ({csp.get('csp_code', '-')})
 - RM: {_first_name(state.get('rm_name')) or '-'}
 - CSP's recent tickets:
 {tlist}
-- Current understanding: intent={state.get('intent')} confidence={state.get('intent_confidence')} details={json.dumps(slots, ensure_ascii=False)}
+"""
+
+    # TIER 3: Current state (grows with each turn)
+    slots = {k: v for k, v in (state.get("slots") or {}).items() if not k.startswith("_")}
+    tier_low = f"""- Current understanding: intent={state.get('intent')} confidence={state.get('intent_confidence')} details={json.dumps(slots, ensure_ascii=False)}
 - Confirmation already asked: {'yes' if (state.get('slots') or {}).get('_asked') == '_confirm' else 'no'}
 - Intent confidence below {INTENT_CONFIDENCE_MIN} means you should ask a clarifying question instead of guessing.
 """
+
+    prompt = tier_high + tier_medium + tier_low
+
+    # Token accounting per tier
+    tier_tokens = {
+        "system": _estimate_tokens(tier_high),
+        "context": _estimate_tokens(tier_medium),
+        "history": _estimate_tokens(tier_low),
+        "output": 150,  # conservative estimate for response
+    }
+
+    return prompt, tier_tokens
 
 
 def _build_messages(state: dict, user_text: str) -> list[dict]:
@@ -206,7 +243,8 @@ class ClaudeEngine:
 
     def decide(self, state: dict, user_text: str) -> dict:
         t0 = time.perf_counter()
-        system, messages = _system_prompt(state), _build_messages(state, user_text)
+        system, tier_tokens = _system_prompt(state)
+        messages = _build_messages(state, user_text)
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=600,
@@ -219,7 +257,7 @@ class ClaudeEngine:
         block = next(b for b in resp.content if b.type == "tool_use")
         d = _parse(dict(block.input), state, self.name, latency, resp.usage.input_tokens, resp.usage.output_tokens,
                    self.model)
-        d["trace"] = {"system": system, "messages": messages, "raw": dict(block.input)}   # app/telemetry.py
+        d["trace"] = {"system": system, "messages": messages, "raw": dict(block.input), "tier_tokens": tier_tokens}
         return d
 
 
@@ -256,7 +294,8 @@ class OpenAICompatEngine:
 
     def decide(self, state: dict, user_text: str) -> dict:
         from openai import BadRequestError, RateLimitError
-        messages = [{"role": "system", "content": _system_prompt(state)}] + _build_messages(state, user_text)
+        system, tier_tokens = _system_prompt(state)
+        messages = [{"role": "system", "content": system}] + _build_messages(state, user_text)
         now = time.time()
         ready = [m for m in self.models if self._cooldown.get(m, 0) <= now] or self.models[-1:]
         t0 = time.perf_counter()
@@ -290,7 +329,7 @@ class OpenAICompatEngine:
         usage = resp.usage
         d = _parse(out, state, self.name, latency,
                    usage.prompt_tokens if usage else 0, usage.completion_tokens if usage else 0, model)
-        d["trace"] = {"system": messages[0]["content"], "messages": messages[1:], "raw": out}   # app/telemetry.py
+        d["trace"] = {"system": system, "messages": messages[1:], "raw": out, "tier_tokens": tier_tokens}
         return d
 
 
