@@ -75,7 +75,8 @@ seed_if_demo()
 # ------------------------------------------------------------------ auth
 PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/favicon.ico", "/api/auth/login",
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
-                "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz"}
+                "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
+                "/api/recordings/cleanup"}
 PUBLIC_PREFIXES = ("/static/",)
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
