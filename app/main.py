@@ -965,7 +965,8 @@ def process_recordings():
 @app.post("/api/recordings/cleanup")
 def cleanup_recordings():
     """Remove non-CSP and short recordings, reset failed ones for reprocessing."""
-    return recordings.cleanup_invalid_recordings()
+    threading.Thread(target=recordings.cleanup_invalid_recordings, daemon=True, name="cleanup-recordings").start()
+    return {"started": True, "message": "Cleanup running in background"}
 
 
 # ------------------------------------------------------------------ integrations (app/integrations.py, INTEGRATION.md)
