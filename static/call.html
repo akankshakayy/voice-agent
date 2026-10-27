@@ -14,8 +14,6 @@
   @media (max-width: 1150px) { .layout { grid-template-columns: 1fr; } }
   .setup label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 12px 0 5px; }
   .setup select { width: 100%; }
-  #togglePicker { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; font-size: 16px; font-weight: bold; }
-  #togglePicker:hover { background: var(--panel); }
   .toggle { display: flex !important; gap: 10px; align-items: center; margin: 10px 0 0 !important; color: var(--text) !important;
     font-size: 13.5px !important; font-weight: 500 !important; cursor: pointer; }
   .row { display: flex; gap: 8px; } .row > * { flex: 1; }
@@ -119,10 +117,7 @@
       <label for="rmPick">RM</label>
       <select id="rmPick"></select>
       <label for="cspSearch">Caller / CSP: search by code or name</label>
-      <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-        <input type="search" id="cspSearch" placeholder="e.g. TST04 or Sunita" autocomplete="off" style="flex: 1;">
-        <button type="button" id="togglePicker" style="flex: 0; min-width: 44px; padding: 0;" title="Close" aria-label="Close CSP list">✕</button>
-      </div>
+      <input type="search" id="cspSearch" placeholder="e.g. TST04 or Sunita" autocomplete="off">
       <div class="picker" id="picker" role="listbox" aria-label="CSPs"><div class="none">Loading…</div></div>
       <div class="picked" id="picked"></div>
       <label>Purpose</label>
@@ -239,7 +234,7 @@ $("rmPick").onchange = () => { PICK = { id: null, unknown: false, label: "" }; s
 $("cspSearch").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadCsps, 200); };
 $("cspSearch").onfocus = openPicker;
 $("cspSearch").onkeydown = e => { if (e.key === "Escape") closePicker(); };
-$("togglePicker").onclick = closePicker;
+$("cspSearch").onmousedown = e => { if (pickerOpen) { e.preventDefault(); closePicker(); } };
 $("picker").onclick = e => {
   const b = e.target.closest("button.csp");
   if (!b || b.disabled) return;
