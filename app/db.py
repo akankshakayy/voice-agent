@@ -130,6 +130,9 @@ CREATE TABLE IF NOT EXISTS corrections (      -- a person changed something the 
     field TEXT,                -- summary | category | detail:<slot>
     before TEXT, after TEXT, distance INTEGER, delta REAL, actor TEXT, prompt_version TEXT
 );
+CREATE TABLE IF NOT EXISTS misheard_blocked (  -- misheard-word pairs kept out of the prompts (app/misheard.py)
+    heard TEXT, said TEXT, by TEXT, at REAL, PRIMARY KEY (heard, said)
+);
 CREATE INDEX IF NOT EXISTS idx_traces_call ON traces(call_id);
 CREATE INDEX IF NOT EXISTS idx_corrections_ref ON corrections(source, ref_id);
 CREATE INDEX IF NOT EXISTS idx_auth_events_email ON auth_events(email, event, ts);

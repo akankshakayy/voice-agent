@@ -32,14 +32,20 @@ _version = None
 # ---------------------------------------------------------------- prompt version
 def prompt_version() -> str:
     """Short fingerprint of the prompt code and the tool schema. It changes whenever either changes,
-    so every metric can be split by the prompt that produced it without anyone bumping a number."""
+    so every metric can be split by the prompt that produced it without anyone bumping a number.
+    The misheard-words hint (app/misheard.py) is data, not code, but changes the prompt too: it adds "-m" and
+    its own fingerprint."""
     global _version
     if _version is None:
         from . import llm_engine
         src = inspect.getsource(llm_engine._system_prompt) + inspect.getsource(llm_engine._build_messages) \
             + json.dumps(llm_engine.AGENT_TURN_TOOL, sort_keys=True)
         _version = os.environ.get("PROMPT_VERSION") or "p-" + hashlib.sha1(src.encode()).hexdigest()[:8]
-    return _version
+    if os.environ.get("PROMPT_VERSION"):
+        return _version
+    from . import misheard
+    hint = misheard.hint()
+    return f"{_version}-m{hashlib.sha1(hint.encode()).hexdigest()[:4]}" if hint else _version
 
 
 # ---------------------------------------------------------------- traces

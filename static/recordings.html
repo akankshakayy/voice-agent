@@ -250,7 +250,7 @@ async function openRec(id) {
       <p class="report-meta">Written from the whole transcript${r.report_s != null ? ` in ${secs(r.report_s)}` : ""}${r.report_model ? ` · ${esc(r.report_model)}` : ""}. Times in [brackets] point to the transcript below.</p>
       ${sumFixed ? fixedNote(r) : ""}
       ${stale ? `<div class="note">The transcript was corrected after this summary was written.
-        <button class="linkish" onclick="resummarize(${r.id})">Write the summary again from the corrected transcript</button></div>` : ""}
+        <button class="linkish" onclick="reprocess(${r.id})">Update the summaries, issue and details from the corrected transcript</button></div>` : ""}
       <div class="report" id="report">${mdHtml(r.report_md)}</div>`
       : r.report_error ? `<div class="note bad">The summary couldn't be written: ${esc(r.report_error)}</div>`
       : r.status === "done" && r.transcript?.length ? `<div class="note">Writing the detailed summary… This page updates by itself.</div>`
@@ -363,9 +363,17 @@ function nextToCheck() {
   if (next) { EDITING = false; openRec(next.id); }
 }
 
+let LEARN = null;
+async function blockPair(k, blocked) {
+  const p = LEARN.misheard[k];
+  try {
+    await api("api/recordings/misheard/block", { method: "POST", body: { heard: p.heard, said: p.said, blocked } });
+    toast(blocked ? "Kept out of the prompts" : "Allowed back into the prompts"); loadLearning();
+  } catch (e) { toast(errText(e)); }
+}
 async function loadLearning() {
   let d;
-  try { d = await api("api/recordings/learning"); } catch (e) { return; }
+  try { d = LEARN = await api("api/recordings/learning"); } catch (e) { return; }
   const t = d.transcripts, i = d.issues;
   $("learnPanel").hidden = false;
   if (!t.calls && !i.checked) {
@@ -394,10 +402,13 @@ async function loadLearning() {
       </div>
       <div>
         <h3>Words speech-to-text keeps mishearing</h3>
-        ${d.misheard.length ? `<div class="table-wrap"><table><thead><tr><th>Heard</th><th>Really said</th><th class="num">Times</th><th class="num">Calls</th></tr></thead>
-          <tbody>${d.misheard.map(p => `<tr><td>${esc(p.heard)}</td><td><b>${esc(p.said)}</b>${p.count >= d.misheard_in_prompts_from ? ' <span class="badge b-ok" title="Given to the agent, the call review and the summary">in prompts</span>' : ""}</td>
-            <td class="num">${num(p.count)}</td><td class="num">${num(p.calls)}</td></tr>`).join("")}</tbody></table></div>
-          <p class="small muted">Seen ${d.misheard_in_prompts_from} times or more: given to the AI as a hint.</p>`
+        ${d.misheard.length ? `<div class="table-wrap"><table><thead><tr><th>Heard</th><th>Really said</th><th class="num">Times</th><th class="num">Calls</th><th>Given to the AI</th></tr></thead>
+          <tbody>${d.misheard.map((p, k) => `<tr><td>${esc(p.heard)}</td><td><b>${esc(p.said)}</b></td>
+            <td class="num">${num(p.count)}</td><td class="num">${num(p.calls)}</td>
+            <td>${p.in_prompts ? '<span class="badge b-ok">In prompts</span>' : `<span class="small muted">${esc(p.why_not === "blocked" ? "Blocked" : "Not yet: " + p.why_not)}</span>`}
+              ${STAFF && (p.in_prompts || p.blocked) ? `<button class="linkish" style="background:none;border:0;box-shadow:none;color:var(--accent);cursor:pointer;text-decoration:underline;padding:0 0 0 6px;font-size:12px"
+                onclick="blockPair(${k}, ${!p.blocked})">${p.blocked ? "Allow" : "Block"}</button>` : ""}</td></tr>`).join("")}</tbody></table></div>
+          <p class="small muted">A pair is given to the AI once it was fixed on ${d.misheard_rule.calls} calls by ${d.misheard_rule.people} different people.${STAFF ? " Block any that are wrong." : ""}</p>`
           : '<p class="muted small">None yet. Corrected transcript lines show up here.</p>'}
       </div>
     </div>`;
@@ -460,7 +471,7 @@ async function saveTranscript() {
     speaker: el.querySelector(".es")?.value, voice: el.querySelector(".ev")?.value }));
   const removed = document.querySelectorAll("#lines .line.removed").length;
   if (removed && !confirm(`Remove ${removed} line${removed > 1 ? "s" : ""} from the transcript?`)) return;
-  await saveEdits({ lines });
+  await saveEdits({ lines, based_on: OPEN.transcript_version ?? null });
 }
 async function saveEdits(body) {
   try {
@@ -483,7 +494,9 @@ async function resummarize(id) {
   setTimeout(() => OPEN?.id === id && !EDITING && openRec(id), 15000);
 }
 async function reprocess(id) {
-  if (OPEN?.transcript_edited_at && !confirm("Your transcript corrections are kept: the issue type, details and summaries are worked out again from the corrected text. Go ahead?")) return;
+  const handFixed = [OPEN?.agent_intent != null && "issue type and details", (OPEN?.agent_summary != null || OPEN?.agent_report_md != null) && "summaries"].filter(Boolean);
+  if (OPEN?.transcript_edited_at && !confirm("Your transcript corrections are kept: the issue type, details and summaries are worked out again from the corrected text."
+    + (handFixed.length ? ` This replaces the ${handFixed.join(" and ")} corrected by hand (those corrections stay on record).` : "") + " Go ahead?")) return;
   await api(`api/recordings/${id}/reprocess`, { method: "POST" }); toast("Processing again"); await refresh(); openRec(id); }
 async function removeRec(id) {
   if (!confirm("Delete this recording and its transcript for good?")) return;

@@ -8,6 +8,11 @@ gives:
   into transcripts (see recordings.STT_PROMPT).
 
 Pairs that carry a number of three or more digits are left out: they are values (amounts, IDs), not words.
+
+What goes into prompts is text people typed, so a pair must earn its place: seen on MIN_CALLS calls, fixed by
+MIN_PEOPLE different people, about the same number of words on both sides (a misheard word, not a rewrite), and
+not blocked by admin or ops on the recordings page (misheard_blocked). One person can't put words into every
+call's prompt on their own.
 """
 import json
 import os
@@ -18,7 +23,9 @@ from difflib import SequenceMatcher
 
 from . import db
 
-MIN_COUNT = int(os.environ.get("MISHEARD_MIN_COUNT", "2"))   # seen this often before it goes into prompts
+MIN_COUNT = int(os.environ.get("MISHEARD_MIN_COUNT", "2"))   # seen this often before it goes into prompts,
+MIN_CALLS = int(os.environ.get("MISHEARD_MIN_CALLS", "2"))   # on this many calls,
+MIN_PEOPLE = int(os.environ.get("MISHEARD_MIN_PEOPLE", "2"))  # fixed by this many people
 MAX_PAIR_WORDS = 3          # longer replacements are rewrites, not a misheard word
 HINT_PAIRS = 25
 _PUNCT = ".,?!।|\"'()[]{}:;-–—…“”‘’"
@@ -63,27 +70,63 @@ def _pairs_in(heard: str, said: str):
         a, b = " ".join(h[i1:i2]), " ".join(s[j1:j2])
         if re.search(r"\d{3}|\[", a + b):      # values (amounts, IDs) and masked numbers: not vocabulary
             continue
+        if re.search(r'["\\<>{}`]', a + b):     # can't be quoted safely in a prompt
+            continue
         yield a, b
+
+
+def _why_not(count: int, calls: int, people: int, heard: str, said: str, blocked: bool) -> str | None:
+    """Why a pair is not given to the AI yet, or None when it is."""
+    if blocked:
+        return "blocked"
+    if abs(len(heard.split()) - len(said.split())) > 1:
+        return "a rewrite, not a misheard word"
+    if count < MIN_COUNT or calls < MIN_CALLS:
+        return f"needs {MIN_CALLS} calls"
+    if people < MIN_PEOPLE:
+        return f"needs fixing by {MIN_PEOPLE} people"
+    return None
 
 
 def pairs(min_count: int = 1, limit: int = 200, rm_id: int | None = None) -> list[dict]:
     """Misheard words across every corrected transcript (or one RM's), most frequent first:
-    [{"heard", "said", "count", "calls"}]. The commonest spelling of each side is shown."""
-    counts, calls, spell_h, spell_s = Counter(), defaultdict(set), defaultdict(Counter), defaultdict(Counter)
-    for r in db.q("SELECT id, transcript_json FROM recordings WHERE transcript_edited_at IS NOT NULL"
-                  + (" AND rm_id=?" if rm_id else ""), (rm_id,) if rm_id else ()):
+    [{"heard", "said", "count", "calls", "people", "in_prompts", "why_not"}]. The commonest spelling of each
+    side is shown. in_prompts is decided over every RM's calls, whatever rm_id narrows the list to."""
+    counts, calls, people = Counter(), defaultdict(set), defaultdict(set)
+    spell_h, spell_s = defaultdict(Counter), defaultdict(Counter)
+    for r in db.q("SELECT id, rm_id, edited_by, transcript_json FROM recordings WHERE transcript_edited_at IS NOT NULL"):
         for l in json.loads(r["transcript_json"] or "[]"):
             if "heard" not in l:
                 continue
             for a, b in _pairs_in(l["heard"], l["text"]):
                 key = (a.lower(), b.lower())
                 counts[key] += 1
-                calls[key].add(r["id"])
+                calls[key].add((r["id"], r["rm_id"]))
+                people[key].add(l.get("fixed_by") or r["edited_by"])
                 spell_h[key][a] += 1
                 spell_s[key][b] += 1
-    out = [{"heard": spell_h[k].most_common(1)[0][0], "said": spell_s[k].most_common(1)[0][0], "count": n,
-            "calls": len(calls[k])} for k, n in counts.items() if n >= min_count]
+    blocked = {(b["heard"], b["said"]) for b in db.q("SELECT heard, said FROM misheard_blocked")}
+    out = []
+    for k, n in counts.items():
+        mine = [c for c in calls[k] if not rm_id or c[1] == rm_id]
+        if n < min_count or not mine:
+            continue
+        p = {"heard": spell_h[k].most_common(1)[0][0], "said": spell_s[k].most_common(1)[0][0], "count": n,
+             "calls": len(calls[k]), "people": len(people[k]), "blocked": k in blocked}
+        p["why_not"] = _why_not(n, p["calls"], p["people"], *k, k in blocked)
+        p["in_prompts"] = p["why_not"] is None
+        out.append(p)
     return sorted(out, key=lambda p: (-p["count"], -p["calls"], p["heard"]))[:limit]
+
+
+def set_blocked(heard: str, said: str, blocked: bool, actor: str):
+    """Admin or ops keep a pair out of the prompts (or let it back in)."""
+    key = (heard.strip().lower(), said.strip().lower())
+    if blocked:
+        db.x("INSERT OR REPLACE INTO misheard_blocked(heard, said, by, at) VALUES(?,?,?,?)", (*key, actor, time.time()))
+    else:
+        db.x("DELETE FROM misheard_blocked WHERE heard=? AND said=?", key)
+    forget()
 
 
 def hint() -> str:
@@ -91,7 +134,7 @@ def hint() -> str:
     the live agent calls this on every turn."""
     if _cache["pairs"] is None or time.time() - _cache["at"] > 600:
         try:
-            _cache.update(pairs=pairs(MIN_COUNT, HINT_PAIRS), at=time.time())
+            _cache.update(pairs=[p for p in pairs(MIN_COUNT) if p["in_prompts"]][:HINT_PAIRS], at=time.time())
         except Exception:
             return ""          # never let this break a call
     if not _cache["pairs"]:

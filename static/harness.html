@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engineering Harness · Eko Sahayak</title>
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" sizes="32x32" href="static/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="static/icons/favicon-16.png">
+<link rel="apple-touch-icon" href="static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="static/common.css">
+<script>try{var t=localStorage.getItem("eko-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<style>
+  #harness { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; gap: 0; }
+  .harness-header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; }
+  .harness-header select, .harness-header button { height: 32px; }
+  .harness-body { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); overflow: hidden; }
+  .pane { display: flex; flex-direction: column; background: var(--surface); }
+  .pane-header { background: var(--surface-alt); border-bottom: 1px solid var(--border); padding: 12px 16px; font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .pane-content { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .trace-item { border-bottom: 1px solid var(--border); padding: 12px 16px; cursor: pointer; transition: background .15s; }
+  .trace-item:hover { background: var(--surface-alt); }
+  .trace-item.active { background: var(--surface-alt); border-left: 3px solid var(--accent); padding-left: 13px; }
+  .trace-turn { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+  .trace-heard { font-size: 13px; color: var(--text); margin-bottom: 6px; font-style: italic; }
+  .trace-intent { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; background: var(--tag-bg, var(--c1)); color: #fff; padding: 3px 8px; border-radius: 3px; }
+  .trace-confidence { display: inline-block; margin-left: 6px; font-size: 10px; color: var(--muted); }
+
+  .token-health { background: var(--surface-alt); border-bottom: 1px solid var(--border); padding: 16px; }
+  .token-bar { display: flex; height: 20px; border-radius: 3px; overflow: hidden; background: var(--surface); border: 1px solid var(--border); margin-bottom: 8px; }
+  .token-segment { transition: flex .2s; position: relative; }
+  .token-segment.optimal { background: #10b981; } .token-segment.warning { background: #f59e0b; } .token-segment.critical { background: #ef4444; }
+  .token-stats { display: flex; gap: 20px; font-size: 12px; }
+  .token-stat { display: flex; align-items: center; gap: 6px; }
+  .token-stat-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .thinking-trace { margin: 12px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-alt); }
+  .thinking-header { padding: 10px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13px; user-select: none; }
+  .thinking-header::before { content: "▶"; display: inline-block; width: 16px; transition: transform .2s; }
+  .thinking-header.open::before { transform: rotate(90deg); }
+  .thinking-content { display: none; padding: 12px; border-top: 1px solid var(--border); max-height: 300px; overflow-y: auto; font-size: 12px; font-family: "SF Mono", Monaco, monospace; white-space: pre-wrap; word-break: break-word; color: var(--text); line-height: 1.4; }
+  .thinking-content.open { display: block; }
+  .thinking-content mark { background: rgba(255,193,7,.3); padding: 2px 4px; border-radius: 2px; }
+
+  .decision-badge { display: inline-block; padding: 4px 10px; border-radius: 3px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; background: var(--tag-bg, var(--c1)); color: #fff; margin-right: 6px; }
+  .badge-model { --tag-bg: linear-gradient(135deg, #0aa2b5, #12a46c); }
+  .badge-rules { --tag-bg: linear-gradient(135deg, #f59e0b, #d97706); }
+  .badge-guard { --tag-bg: linear-gradient(135deg, #ef4444, #dc2626); }
+
+  .compactor { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; font-size: 11px; cursor: pointer; transition: background .15s; }
+  .compactor:hover { background: var(--surface-alt); }
+  .compactor-icon { width: 12px; height: 12px; border-radius: 2px; background: var(--muted); }
+
+  .harness-footer { background: var(--surface-alt); border-top: 1px solid var(--border); padding: 8px 16px; font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 16px; }
+  .live-indicator { display: inline-flex; align-items: center; gap: 6px; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; animation: pulse .8s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+
+  @media (max-width: 900px) { .harness-body { grid-template-columns: 1fr; } .pane-header::after { content: " (scroll)"; opacity: .6; } }
+</style>
+</head>
+<body>
+<div id="harness">
+  <div class="harness-header">
+    <label for="callSelect">Call:</label>
+    <select id="callSelect" style="min-width: 200px;"><option value="">Loading...</option></select>
+    <button id="refreshBtn" class="secondary" style="height: 32px; padding: 0 16px;">↻ Refresh</button>
+    <span class="flex"></span>
+    <span class="live-indicator"><span class="live-dot"></span> Real-time traces</span>
+  </div>
+
+  <div class="harness-body">
+    <div class="pane">
+      <div class="pane-header">🔧 Worker · Agent Execution</div>
+      <div class="token-health">
+        <div class="token-bar" id="tokenBar"></div>
+        <div class="token-stats" id="tokenStats"></div>
+      </div>
+      <div class="pane-content" id="workerLog"></div>
+    </div>
+
+    <div class="pane">
+      <div class="pane-header">✓ Evaluator · Test Results</div>
+      <div class="pane-content" id="evaluatorLog"></div>
+    </div>
+  </div>
+
+  <div class="harness-footer">
+    <span id="callMeta"></span>
+    <span id="status">Waiting for trace data…</span>
+  </div>
+</div>
+
+<script src="static/common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const workerLog = $('workerLog'), evaluatorLog = $('evaluatorLog');
+const callSelect = $('callSelect'), refreshBtn = $('refreshBtn');
+
+let traces = [], currentCallId = null, harnessWorker = null;
+
+// Vendor: Zustand vanilla store (minimal, no deps)
+const createStore = (initialState) => {
+  let state = initialState, listeners = new Set();
+  return {
+    getState: () => state,
+    setState: (updates) => { state = { ...state, ...updates }; listeners.forEach(cb => cb()); },
+    subscribe: (cb) => { listeners.add(cb); return () => listeners.delete(cb); }
+  };
+};
+const store = createStore({ selectedTrace: null, expandedTraces: new Set() });
+
+// Spawn Web Worker for trace processing
+try {
+  harnessWorker = new Worker('static/harness-worker.js');
+  harnessWorker.onmessage = (e) => {
+    const { type, traces: t, tokenStats } = e.data;
+    if (type === 'traces-processed') {
+      traces = t;
+      renderWorkerLog();
+      if (tokenStats) renderTokenBar(tokenStats);
+    }
+  };
+} catch (err) {
+  console.warn('Web Worker unavailable, using main thread:', err);
+}
+
+// Load calls
+(async () => {
+  await loadConfig();
+  $('harness').style.visibility = 'visible';
+
+  try {
+    const resp = await fetch('/api/calls');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const calls = await resp.json();
+    console.log('Loaded calls:', calls);
+    const html = calls.map(c => `<option value="${c.id}">${c.id} · ${c.csp_name || '?'} (${new Date(c.started_at*1000).toLocaleTimeString()})</option>`).join('');
+    callSelect.innerHTML = html || '<option>No calls</option>';
+    if (calls.length > 0) { callSelect.value = calls[0].id; await loadTraces(calls[0].id); }
+    $('status').textContent = `Loaded ${calls.length} call(s)`;
+  } catch (err) {
+    console.error('Failed to load calls:', err);
+    callSelect.innerHTML = '<option>Error loading calls</option>';
+    $('status').textContent = `Error: ${err.message}`;
+  }
+});
+
+callSelect.onchange = () => { if (callSelect.value) loadTraces(+callSelect.value); };
+refreshBtn.onclick = () => { if (currentCallId) loadTraces(currentCallId); };
+
+async function loadTraces(callId) {
+  currentCallId = callId;
+  try {
+    const resp = await fetch(`/api/calls/${callId}/traces`);
+    const data = await resp.json();
+    $('status').textContent = `Loaded ${data.length} trace(s)`;
+    $('callMeta').textContent = `Call #${callId} · ${data.length} turns`;
+
+    // Send to worker for processing (or use main thread fallback)
+    if (harnessWorker) {
+      harnessWorker.postMessage({ type: 'process', traces: data });
+    } else {
+      traces = data;
+      renderWorkerLog();
+      const stats = computeTokenStats(data);
+      renderTokenBar(stats);
+    }
+  } catch (err) {
+    $('status').textContent = `Error: ${err.message}`;
+  }
+}
+
+function computeTokenStats(data) {
+  const totals = data.reduce((a, t) => ({
+    input: a.input + (t.input_tokens || 0),
+    output: a.output + (t.output_tokens || 0)
+  }), { input: 0, output: 0 });
+  totals.total = totals.input + totals.output;
+  totals.percent = Math.round((totals.total / (200000)) * 100); // Assume 200k context
+  return totals;
+}
+
+function renderTokenBar(stats) {
+  const pct = Math.min(stats.percent, 100);
+  const colors = pct <= 60 ? 'optimal' : pct <= 80 ? 'warning' : 'critical';
+  $('tokenBar').innerHTML = `<div class="token-segment ${colors}" style="flex: ${pct}"></div><div class="token-segment" style="flex: ${100-pct}"></div>`;
+  $('tokenStats').innerHTML = `
+    <div class="token-stat"><span class="token-stat-dot" style="background:#10b981"></span> In: ${stats.input.toLocaleString()}</div>
+    <div class="token-stat"><span class="token-stat-dot" style="background:#f59e0b"></span> Out: ${stats.output.toLocaleString()}</div>
+    <div class="token-stat"><span class="token-stat-dot" style="background:#ef4444"></span> Total: ${stats.total.toLocaleString()} (${pct}%)</div>
+  `;
+}
+
+function renderWorkerLog() {
+  workerLog.innerHTML = traces.map((t, i) => {
+    const heard = (t.context?.heard || '?').slice(0, 100);
+    const intent = t.output?.intent || 'unknown';
+    const conf = t.output?.intent_confidence;
+    const engine = t.engine || 'unknown';
+    const badge = engine === 'model' ? 'badge-model' : engine === 'rules' ? 'badge-rules' : 'badge-guard';
+    const isOpen = store.getState().expandedTraces.has(i);
+
+    return `<div class="trace-item ${store.getState().selectedTrace === i ? 'active' : ''}" onclick="selectTrace(${i})">
+      <div class="trace-turn">Turn ${t.turn_id} • ${t.engine} engine</div>
+      <div class="trace-heard">"${heard}"</div>
+      <div>
+        <span class="trace-intent">${intent}</span>
+        ${conf !== null ? `<span class="trace-confidence">${Math.round(conf*100)}% confidence</span>` : ''}
+        <span class="decision-badge ${badge}">${t.engine}</span>
+        <span class="compactor" onclick="toggleThinking(event, ${i})"><span class="compactor-icon"></span> Trace (${t.latency_ms}ms)</span>
+      </div>
+      ${isOpen ? `<div class="thinking-trace"><div class="thinking-header open">Prompt & Output</div><div class="thinking-content open">${escapeHtml(JSON.stringify(t, null, 2))}</div></div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function selectTrace(idx) {
+  store.setState({ selectedTrace: idx });
+  renderWorkerLog();
+  renderEvaluator(traces[idx]);
+}
+
+function toggleThinking(e, idx) {
+  e.stopPropagation();
+  const expanded = store.getState().expandedTraces;
+  if (expanded.has(idx)) expanded.delete(idx);
+  else expanded.add(idx);
+  store.setState({ expandedTraces: new Set(expanded) });
+  renderWorkerLog();
+}
+
+function renderEvaluator(trace) {
+  if (!trace) {
+    evaluatorLog.innerHTML = '<div style="padding:16px; color:var(--muted)">Select a trace to inspect</div>';
+    return;
+  }
+  const output = trace.output || {};
+  const rawOutput = trace.raw_output || {};
+
+  evaluatorLog.innerHTML = `
+    <div style="padding:16px; font-size:12px; line-height:1.6;">
+      <div style="margin-bottom:16px">
+        <div style="font-weight:600; margin-bottom:8px">Decision Details</div>
+        <div><strong>Engine:</strong> ${trace.engine}</div>
+        <div><strong>Model:</strong> ${trace.model || 'N/A'}</div>
+        <div><strong>Latency:</strong> ${trace.latency_ms}ms</div>
+        <div><strong>Tokens:</strong> ${trace.input_tokens} in + ${trace.output_tokens} out</div>
+      </div>
+
+      <div style="margin-bottom:16px">
+        <div style="font-weight:600; margin-bottom:8px">Extracted Slots</div>
+        <div style="background:var(--surface); padding:8px; border-radius:3px; font-family:monospace; font-size:11px; max-height:150px; overflow-y:auto;">
+          ${Object.entries(output.slots || {}).map(([k,v]) => `<div><strong>${k}:</strong> ${escapeHtml(String(v))}</div>`).join('') || '<em>No slots</em>'}
+        </div>
+      </div>
+
+      <div>
+        <div style="font-weight:600; margin-bottom:8px">Raw LLM Output</div>
+        <div style="background:var(--surface); padding:8px; border-radius:3px; font-family:monospace; font-size:10px; max-height:150px; overflow-y:auto; white-space:pre-wrap; word-break:break-word;">
+          ${escapeHtml(JSON.stringify(rawOutput, null, 2))}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function escapeHtml(text) {
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+  return String(text).replace(/[&<>"']/g, c => map[c]);
+}
+
+store.subscribe(renderWorkerLog);
+</script>
+</body>
+</html>

@@ -211,9 +211,14 @@ def delete_recording(rec_id: int) -> bool:
 CHECKS = ("transcript", "issue")
 
 
+def transcript_version(r: dict) -> float | None:
+    """Changes whenever the transcript's lines do: a person saves corrections, or it is transcribed again."""
+    return r.get("transcript_edited_at") or r.get("processed_at")
+
+
 def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary: str | None = None,
                report_md: str | None = None, intent: str | None = None, slots: dict | None = None,
-               checked=()) -> dict:
+               checked=(), based_on: float | None = None) -> dict:
     """A person fixes what speech-to-text or the LLM got wrong.
 
     lines: every line to keep, in order, as {"i": its index in the transcript now, "text", "speaker", "voice"}.
@@ -226,8 +231,11 @@ def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary
 
     Saving lines means the whole transcript was checked, and so does checked=["transcript"] ("checked, no
     changes"): a checked transcript gets its word error rate and can serve as a scorecard reference. Saving the
-    issue, or checked=["issue"], marks the issue type and details as checked."""
-    r = db.q("""SELECT status, transcript_json, removed_json, issue_segment, summary, report_md, intent, slots_json,
+    issue, or checked=["issue"], marks the issue type and details as checked.
+
+    based_on: the transcript's version (transcript_version) when the person's page was opened. Lines are matched
+    by index, so a save made on a transcript that changed since would land on the wrong lines: it is refused."""
+    r = db.q("""SELECT status, transcript_json, transcript_edited_at, processed_at, removed_json, issue_segment, summary, report_md, intent, slots_json,
                 agent_summary, agent_report_md, agent_intent FROM recordings WHERE id=?""", (rec_id,), one=True)
     if not r:
         raise LookupError("Recording not found")
@@ -239,6 +247,9 @@ def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary
     fields, log_ = {}, []
     transcript, removed = json.loads(r["transcript_json"] or "[]"), json.loads(r["removed_json"] or "[]")
     if lines is not None:
+        if based_on != transcript_version(r):
+            raise ValueError("Someone else saved changes to this transcript while you were editing. "
+                             "Open it again and redo your corrections")
         old = transcript
         idx = [l.get("i") for l in lines]
         if any(not isinstance(i, int) or not 0 <= i < len(old) for i in idx) or idx != sorted(set(idx)):
@@ -256,6 +267,7 @@ def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary
                 line["voice"] = l["voice"]
             if text != o["text"]:
                 line.setdefault("heard", o["text"])
+                line["fixed_by"] = actor          # misheard.py counts people, not just calls
                 log_.append(("transcript", o["text"], text))
             if line.get("speaker") != o.get("speaker") or line.get("voice") != o.get("voice"):
                 log_.append(("speaker", f"{o.get('voice') or ''} {o.get('speaker')}".strip(),
@@ -787,6 +799,7 @@ def get_recording(rec_id: int) -> dict | None:
         r["slots"] = json.loads(r.pop("slots_json") or "{}")
         r["removed"] = json.loads(r.pop("removed_json") or "[]")
         r["agent_slots"] = json.loads(r.pop("agent_slots_json") or "null")
+        r["transcript_version"] = transcript_version(r)
     return r
 
 
@@ -835,7 +848,8 @@ def learning_stats(rm_id: int | None = None) -> dict:
             "issues": {"checked": len(issues), "type_right_pct": pct(type_right, len(issues)),
                        "details_right_pct": pct(details_right, len(issues)),
                        "detail_fixes": [{"slot": k, "label": SLOT_LABELS.get(k, k), "count": n} for k, n in fixes.most_common()]},
-            "misheard": misheard.pairs(1, 60, rm_id), "misheard_in_prompts_from": misheard.MIN_COUNT}
+            "misheard": misheard.pairs(1, 60, rm_id),
+            "misheard_rule": {"calls": misheard.MIN_CALLS, "people": misheard.MIN_PEOPLE}}
 
 
 # ---------------------------------------------------------------- feeding the scorecard
@@ -843,61 +857,76 @@ def export_candidates(out_csv: str | None = None, audio_dir: str | None = None, 
     """Cut the CSP's opening complaint from every finished call into evals/audio/ and add a draft row to
     evals/candidates.csv. reference_text is left empty unless a person checked the transcript (Whisper's own text
     would score itself as perfect): someone listens, writes or checks what was really said, then moves the row to
-    cases.csv."""
+    cases.csv. A draft exported before its call was checked is filled in once it is: only its empty fields, so
+    nothing a person wrote in the file is overwritten. Returns how many drafts were added or filled in."""
     out_csv = out_csv or os.path.join(ROOT, "evals", "candidates.csv")
     audio_dir = audio_dir or os.path.join(ROOT, "evals", "audio")
     with open(os.path.join(ROOT, "evals", "cases.csv"), newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        cols, have = reader.fieldnames, {row["id"] for row in reader}
+        cols, in_cases = reader.fieldnames, {row["id"] for row in reader}
+    drafts = []
     if os.path.exists(out_csv):
         with open(out_csv, newline="", encoding="utf-8") as f:
-            have |= {row["id"] for row in csv.DictReader(f)}
+            drafts = list(csv.DictReader(f))
+    by_id = {row["id"]: row for row in drafts}
     if not stt.ffmpeg():
         raise RuntimeError("Cutting clips needs ffmpeg")
     os.makedirs(audio_dir, exist_ok=True)
-    new_rows = []
+    added = filled = 0
     for r in db.q("""SELECT * FROM recordings WHERE status='done' AND is_csp_call=1 AND issue_segment >= 0
                      ORDER BY id"""):
         case_id = f"rec{r['id']}"
         segs = json.loads(r["transcript_json"] or "[]")
         i = r["issue_segment"]
-        if case_id in have or i >= len(segs):
+        old = by_id.get(case_id)
+        if case_id in in_cases or i >= len(segs) or (old and old.get("reference_text")):
             continue
         j, end = i + 1, segs[i]["end"]
         while j < len(segs) and segs[j].get("speaker") == "csp" and segs[j]["end"] - segs[i]["start"] <= max_clip_s:
             end, j = segs[j]["end"], j + 1
-        clip = f"{case_id}.ogg"
+        row = _draft_row(r, segs[i:j], cols, case_id)
+        if old:                     # exported before: fill in what a check has added since
+            if not row["reference_text"]:
+                continue
+            for k, v in row.items():
+                if v and (not old.get(k) or (k == "notes" and old[k].startswith("DRAFT"))):
+                    old[k] = v
+            filled += 1
+            continue
         cut = subprocess.run([stt.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
                               "-ss", f"{max(segs[i]['start'] - 0.2, 0):.2f}", "-to", f"{end + 0.3:.2f}",
                               "-i", os.path.join(storage_dir(), r["file_path"]), "-ac", "1", "-ar", "16000",
-                              "-c:a", "libopus", "-b:a", "32k", os.path.join(audio_dir, clip)],
+                              "-c:a", "libopus", "-b:a", "32k", os.path.join(audio_dir, row["audio"])],
                              capture_output=True, timeout=120)
         if cut.returncode != 0:
             log.warning("Couldn't cut a clip from recording %d: %s", r["id"], cut.stderr[:200])
             continue
-        heard = " ".join(s.get("heard", s["text"]) for s in segs[i:j])
-        # A transcript a person checked already says what was really said: that is the reference
-        said = " ".join(s["text"] for s in segs[i:j]) if r["checked_at"] else ""
-        slots = json.loads(r["slots_json"] or "{}") if r["issue_checked_at"] else {}
-        row = dict.fromkeys(cols, "")
-        row.update({k: v for k, v in slots.items() if k in cols and k not in ("id", "notes")})
-        row.update(id=case_id, lang="en" if r["language"] == "en" else "hi", audio=clip, reference_text=said,
-                   expected_intent=r["intent"] if r["intent"] in CATEGORIES else "",
-                   notes=f"DRAFT from recorded call {r['id']}: listen and "
-                         + (f"check reference_text (checked by {r['checked_by']}), " if said else "fill reference_text, ")
-                         + ("check the details (checked by " + r["issue_checked_by"] + "), fill expected_action. "
-                            if r["issue_checked_at"] else "fill expected_action and details. ")
-                         + f"Whisper heard: {heard} | AI review of the whole call: "
-                         f"{r['summary']} {r['slots_json'] or ''}")
-        new_rows.append(row)
-    if new_rows:
-        fresh = not os.path.exists(out_csv)
-        with open(out_csv, "a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=cols)
-            if fresh:
-                w.writeheader()
-            w.writerows(new_rows)
-    return len(new_rows)
+        drafts.append(row)
+        added += 1
+    if added or filled:
+        with open(out_csv, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(drafts)
+    return added + filled
+
+
+def _draft_row(r: dict, lines: list[dict], cols: list[str], case_id: str) -> dict:
+    heard = " ".join(s.get("heard", s["text"]) for s in lines)
+    # A transcript a person checked already says what was really said: that is the reference
+    said = " ".join(s["text"] for s in lines) if r["checked_at"] else ""
+    slots = json.loads(r["slots_json"] or "{}") if r["issue_checked_at"] else {}
+    row = dict.fromkeys(cols, "")
+    row.update({k: v for k, v in slots.items() if k in cols and k not in ("id", "notes")})
+    row.update(id=case_id, lang="en" if r["language"] == "en" else "hi", audio=f"{case_id}.ogg", reference_text=said,
+               expected_intent=r["intent"] if r["intent"] in CATEGORIES else "",
+               notes=f"DRAFT from recorded call {r['id']}: listen and "
+                     + (f"check reference_text (checked by {r['checked_by']}), " if said else "fill reference_text, ")
+                     + ("check the details (checked by " + r["issue_checked_by"] + "), fill expected_action. "
+                        if r["issue_checked_at"] else "fill expected_action and details. ")
+                     + f"Whisper heard: {heard} | AI review of the whole call: "
+                     f"{r['summary']} {r['slots_json'] or ''}")
+    return row
 
 
 # ---------------------------------------------------------------- command line
@@ -938,7 +967,7 @@ def _cli():
             print(f"{r['id']:>4}  {when}  {r['rm_name'] or '-':<16} {r['status']:<6} {r['intent'] or '-':<15} "
                   f"{(r['summary'] or r['error'] or '')[:70]}")
     elif a.cmd == "export":
-        print(f"Added {export_candidates()} draft case(s) to evals/candidates.csv")
+        print(f"Added or filled in {export_candidates()} draft case(s) in evals/candidates.csv")
 
 
 if __name__ == "__main__":

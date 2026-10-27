@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import agent, auth, db, google_auth, integrations, mailer, metrics, recordings, report, stt, telemetry, tts  # noqa: E402
+from . import agent, auth, db, google_auth, integrations, mailer, metrics, misheard, recordings, report, stt, telemetry, tts  # noqa: E402
 from .seed import seed_if_demo  # noqa: E402
 from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, MAX_MISUNDERSTOOD  # noqa
 
@@ -79,7 +79,7 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
 PUBLIC_PREFIXES = ("/static/",)
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
-PAGE_ROLES = {"/": ("admin", "ops", "rm"), "/call": STAFF, "/ops": STAFF, "/rm": ("admin", "ops", "rm"),
+PAGE_ROLES = {"/": ("admin", "ops", "rm"), "/call": STAFF, "/ops": STAFF, "/harness": STAFF, "/rm": ("admin", "ops", "rm"),
               "/users": ("admin",), "/recordings": ("admin", "ops", "rm"), "/account": ("admin", "ops", "rm", "pending")}
 # All a not-yet-approved account can reach: its own account settings
 PENDING_OK = {"/pending", "/account", "/api/auth/me", "/api/auth/logout", "/api/auth/logout-all", "/api/auth/password",
@@ -498,6 +498,11 @@ def recordings_page():
     return FileResponse(os.path.join(STATIC, "recordings.html"))
 
 
+@app.get("/harness", dependencies=[Depends(allow(*STAFF))])
+def harness_page():
+    return FileResponse(os.path.join(STATIC, "harness.html"))
+
+
 # ------------------------------------------------------------------ reference data
 @app.get("/api/config", dependencies=[Depends(allow("admin", "ops", "rm"))])
 def config():
@@ -595,6 +600,13 @@ def hangup(call_id: int):
         return agent.hangup(call_id)
     except KeyError:
         raise HTTPException(404, "call not found")
+
+
+@app.get("/api/calls", dependencies=[Depends(require_login)])
+def list_calls(limit: int = 100):
+    """List recent calls for the harness UI (any authenticated user)."""
+    return db.q("SELECT id, csp_id, rm_id, (SELECT name FROM csps WHERE id=calls.csp_id) csp_name, started_at, ended_at "
+                "FROM calls ORDER BY started_at DESC LIMIT ?", (limit,))
 
 
 @app.get("/api/calls/{call_id}", dependencies=[Depends(allow("admin", "ops", "rm"))])
@@ -802,6 +814,19 @@ def recordings_learning(request: Request, rm_id: int | None = None):
     return recordings.learning_stats(rm_scope(request, rm_id))
 
 
+class MisheardBlockBody(BaseModel):
+    heard: str
+    said: str
+    blocked: bool = True
+
+
+@app.post("/api/recordings/misheard/block")
+def block_misheard(body: MisheardBlockBody, actor=Depends(allow(*STAFF))):
+    """Keep a misheard-word pair out of the AI's prompts (or let it back in)."""
+    misheard.set_blocked(body.heard, body.said, body.blocked, _who(actor))
+    return {"ok": True}
+
+
 @app.get("/api/recordings/{rec_id}", dependencies=[Depends(allow("admin", "ops", "rm"))])
 def get_recording(rec_id: int, request: Request):
     return _own_recording(request, rec_id)
@@ -868,6 +893,7 @@ class RecordingEditBody(BaseModel):
     intent: str | None = None
     slots: dict | None = None            # every detail to keep: {"amount": "5000", ...}
     checked: list[str] = []              # "transcript" / "issue": checked by a person, nothing to change
+    based_on: float | None = None        # the transcript's version when the page was opened (stale check)
 
 
 @app.patch("/api/recordings/{rec_id}")
@@ -877,7 +903,7 @@ def edit_recording(rec_id: int, body: RecordingEditBody, request: Request,
     _own_recording(request, rec_id)
     try:
         return recordings.save_edits(rec_id, _who(actor), body.lines, body.summary, body.report_md, body.intent,
-                                     body.slots, body.checked)
+                                     body.slots, body.checked, body.based_on)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -894,8 +920,11 @@ def summarize_recording(rec_id: int, request: Request):
     return {"started": True}
 
 
-@app.post("/api/recordings/{rec_id}/reprocess", dependencies=[Depends(allow(*STAFF))])
-def reprocess_recording(rec_id: int):
+@app.post("/api/recordings/{rec_id}/reprocess", dependencies=[Depends(allow("admin", "ops", "rm"))])
+def reprocess_recording(rec_id: int, request: Request):
+    """Process a recording again. The RM may, for their own: after correcting the transcript, this updates the
+    summaries, issue type and details from the corrected text (it is not transcribed again)."""
+    _own_recording(request, rec_id)
     if not recordings.reprocess(rec_id):
         raise HTTPException(404, "Recording not found")
     return {"ok": True}

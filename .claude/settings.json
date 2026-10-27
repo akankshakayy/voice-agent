@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(git config *)",
+      "Bash(git fetch *)",
+      "Bash(sed -n *)",
+      "Bash(curl *)",
+      "Bash(ss -ltnp *)",
+      "Bash(jq *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Read",
+      "Edit",
+      "Write",
+      "mcp__claude_ai_Claude_Docs__update",
+      "mcp__claude_ai_Claude_Docs__batch",
+      "mcp__claude_ai_Claude_Docs__guide"
+    ]
+  }
+}

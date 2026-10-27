@@ -812,6 +812,18 @@ def test_export_cuts_the_csp_complaint_into_a_draft_case(monkeypatch, tmp_path):
     assert row["id"] == "rec1" and row["audio"] == "rec1.ogg" and row["expected_intent"] == "dmt_failed"
     assert row["reference_text"] == "" and "DMT 5000" in row["notes"]
     assert (tmp_path / "rec1.ogg").stat().st_size > 0
+    # Checked after it was exported: the draft is filled in, keeping what a person already wrote in the file
+    rows = list(csv.DictReader(open(out, encoding="utf-8")))
+    rows[0]["expected_action"] = "create_ticket"
+    with open(out, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=rows[0].keys())
+        w.writeheader()
+        w.writerows(rows)
+    recordings.save_edits(1, "Asha", checked=["transcript", "issue"])
+    assert recordings.export_candidates(str(out), str(tmp_path)) == 1
+    assert recordings.export_candidates(str(out), str(tmp_path)) == 0
+    row = next(csv.DictReader(open(out, encoding="utf-8")))
+    assert row["reference_text"] and row["expected_action"] == "create_ticket" and "checked by Asha" in row["notes"]
 
 
 # ---------------------------------------------------------------- integrations: API keys and webhooks
@@ -958,7 +970,7 @@ def test_recordings_page_manual_upload_audio_and_rm_scope(monkeypatch):
     assert rm1.get("/api/recordings").json()["recordings"] == []
     assert rm1.get(f"/api/recordings/{first['id']}").status_code == 404
     assert rm1.get(f"/api/recordings/{first['id']}/audio").status_code == 404
-    assert rm1.post(f"/api/recordings/{first['id']}/reprocess").status_code == 403
+    assert rm1.post(f"/api/recordings/{first['id']}/reprocess").status_code == 404   # not their call
     # Process, then process again; admin deletes
     _fake_pipeline(monkeypatch, SEGS, REVIEW)
     recordings.process_pending()
@@ -1834,23 +1846,42 @@ def test_checked_transcripts_are_scored_and_teach_misheard_words():
     from app import misheard, recordings
     a, b, c = _done_recording(), _done_recording(), _done_recording()
     fix = "मेरा DMT फेल हो गया 5000 का"
-    for rid in (a, b):          # the same word misheard on two calls: it goes into the prompts
-        recordings.save_edits(rid, "Asha", lines=[{"i": 0, "text": "हेलो सर"}, {"i": 2, "text": fix}])
+    recordings.save_edits(a, "Asha", lines=[{"i": 0, "text": "हेलो सर"}, {"i": 2, "text": fix}])
+    recordings.save_edits(b, "Asha", lines=[{"i": 0, "text": "हेलो सर"}, {"i": 2, "text": fix}])
+    assert misheard.hint() == ""            # one person alone can't put words into every call's prompt
+    assert misheard.pairs()[0]["why_not"] == "needs fixing by 2 people"
+    d = _done_recording()
+    recordings.save_edits(d, "Ravi", lines=[{"i": 0, "text": "हेलो सर"}, {"i": 2, "text": fix}])  # a second person
     recordings.save_edits(c, "Asha", checked=["transcript"])                    # checked, nothing changed
     ra, rc = recordings.get_recording(a), recordings.get_recording(c)
     # 1 word misheard + 3 made-up words, against the 9 words really said
     assert (ra["stt_errors"], ra["stt_words"]) == (4, 9) and ra["removed"][0]["text"] == "Thanks for watching"
     assert rc["checked_by"] == "Asha" and rc["stt_errors"] == 0 and rc["transcript_edited_at"] is None
     pairs = misheard.pairs()
-    assert pairs[0]["heard"] == "डीएमटी" and pairs[0]["said"] == "DMT" and pairs[0]["calls"] == 2
+    assert pairs[0]["heard"] == "डीएमटी" and pairs[0]["said"] == "DMT" and pairs[0]["calls"] == 3
+    assert pairs[0]["people"] == 2 and pairs[0]["in_prompts"]
     assert all("5000" not in p["said"] for p in pairs)                           # values are not vocabulary
     assert '"डीएमटी" -> "DMT"' in misheard.hint()
+    misheard.set_blocked("डीएमटी", "DMT", True, "Ops")                       # admin/ops can take it out again
+    assert misheard.hint() == "" and misheard.pairs()[0]["why_not"] == "blocked"
+    misheard.set_blocked("डीएमटी", "DMT", False, "Ops")
     from app import llm_engine
     assert "डीएमटी" in llm_engine._system_prompt({"history": []})               # the live agent is told too
     stats = recordings.learning_stats()
-    assert stats["transcripts"]["calls"] == 3 and stats["transcripts"]["words"] == 9 + 9 + 12
-    assert stats["transcripts"]["wer"] == round(8 / stats["transcripts"]["words"], 4)
+    assert stats["transcripts"]["calls"] == 4 and stats["transcripts"]["words"] == 9 + 9 + 12 + 9
+    assert stats["transcripts"]["wer"] == round(12 / stats["transcripts"]["words"], 4)
     misheard.forget()
+
+
+def test_a_save_on_a_stale_transcript_is_refused():
+    from app import recordings
+    rid = _done_recording()
+    seen = recordings.get_recording(rid)["transcript_version"]          # two people open the same call
+    recordings.save_edits(rid, "Asha", lines=[{"i": 1, "text": "Thanks for watching"}, {"i": 2, "text": "मेरा DMT"}],
+                          based_on=seen)
+    with pytest.raises(ValueError, match="Someone else"):             # the second save would hit the wrong lines
+        recordings.save_edits(rid, "Ravi", lines=[{"i": 0, "text": "हेलो"}, {"i": 1, "text": "x"}], based_on=seen)
+    assert recordings.get_recording(rid)["transcript"][0]["text"] == "Thanks for watching"
 
 
 def test_issue_type_and_details_corrected_or_confirmed():
