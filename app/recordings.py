@@ -171,14 +171,35 @@ def save_upload(device: dict, data: bytes, filename: str, started_at_ms: int | N
 
 def _probe_duration(path: str) -> float | None:
     """Length in seconds, for files added by hand (phones send it with the upload)."""
-    if not shutil.which("ffprobe"):
-        return None
-    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
-                         capture_output=True, text=True, timeout=60)
-    try:
-        return round(float(out.stdout.strip()), 1)
-    except ValueError:
-        return None
+    # Try ffprobe first (system or imageio-ffmpeg)
+    ffprobe_cmd = shutil.which("ffprobe")
+    if not ffprobe_cmd:
+        try:
+            import imageio_ffmpeg
+            ffprobe_cmd = imageio_ffmpeg.get_ffprobe_exe()
+        except (ImportError, RuntimeError):
+            pass
+
+    if ffprobe_cmd:
+        try:
+            out = subprocess.run([ffprobe_cmd, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                                 capture_output=True, text=True, timeout=60)
+            if out.stdout.strip():
+                return round(float(out.stdout.strip()), 1)
+        except (ValueError, subprocess.TimeoutExpired):
+            pass
+
+    # Fallback: try using ffmpeg to read duration
+    ffmpeg_cmd = stt.ffmpeg()
+    if ffmpeg_cmd:
+        try:
+            out = subprocess.run([ffmpeg_cmd, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                                 capture_output=True, text=True, timeout=60)
+            if out.stdout.strip():
+                return round(float(out.stdout.strip()), 1)
+        except (ValueError, subprocess.TimeoutExpired):
+            pass
+    return None
 
 
 def audio_file(rec: dict) -> str:
@@ -617,6 +638,19 @@ def stt_confidence(cache: dict) -> float | None:
 def process_one(r: dict):
     started, t0 = time.time(), time.perf_counter()
     path = os.path.join(storage_dir(), r["file_path"])
+
+    # Skip if duration < 2 seconds (too short)
+    if r.get("duration_sec") and r["duration_sec"] < 2:
+        db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
+                  summary="Recording too short (< 2 seconds)", is_csp_call=0, transcript_json=[])
+        return
+
+    # Validate CSP: only transcribe if csp_id is set (calling number matches CSP in sheet)
+    if not r.get("csp_id"):
+        db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
+                  summary="Calling number not in CSP list", is_csp_call=0, transcript_json=[])
+        return
+
     # A transcript a person corrected or checked is reviewed as it stands: transcribing again would undo their work
     corrected = json.loads(r["transcript_json"] or "[]") if r.get("transcript_edited_at") or r.get("checked_at") else None
     cache = _transcribe(r, path) if corrected is None else json.loads(r.get("stt_json") or "null") or {}
@@ -631,7 +665,7 @@ def process_one(r: dict):
         return {"transcribe_s": cache.get("transcribe_s") if not fresh_stt else round(t1 - t0, 1),
                 "transcribe_reused": not fresh_stt, "voices_s": cache.get("voices_s"), "voices_reused": not fresh_voices,
                 "lines_s": round(t2 - t1, 1), "review_s": round(review_s, 1), "total_s": round(time.perf_counter() - t0, 1),
-                "stt": cache.get("stt")}
+                "stt": cache.get("stt"), "stt_confidence": stt_confidence(cache)}
 
     # A new review replaces what a person fixed in the old one (their fixes stay in corrections)
     fields = {"status": "done", "processed_at": time.time(), "attempts": r["attempts"] + 1, "error": None,
@@ -929,6 +963,22 @@ def _draft_row(r: dict, lines: list[dict], cols: list[str], case_id: str) -> dic
     return row
 
 
+def cleanup_invalid_recordings() -> dict:
+    """Remove recordings that don't match CSPs or are too short, and reset failed ones for reprocessing."""
+    # Delete recordings without CSP match (calling number not in calling sheet)
+    deleted_no_csp = db.x("DELETE FROM recordings WHERE csp_id IS NULL AND status='done'")
+
+    # Delete recordings < 2 seconds
+    deleted_short = db.x("DELETE FROM recordings WHERE duration_sec < 2 AND status='done'")
+
+    # Reset failed recordings so they retry
+    reset_failed = db.x("UPDATE recordings SET status='new', error=NULL, attempts=0 WHERE status='failed'")
+
+    log.info("Cleaned up: %d recordings without CSP, %d short recordings, %d failed reset",
+             deleted_no_csp, deleted_short, reset_failed)
+    return {"deleted_no_csp": deleted_no_csp, "deleted_short": deleted_short, "reset_failed": reset_failed}
+
+
 # ---------------------------------------------------------------- command line
 def _cli():
     from dotenv import load_dotenv
@@ -945,6 +995,7 @@ def _cli():
     pr.add_argument("--limit", type=int)
     sub.add_parser("list", help="list recordings")
     sub.add_parser("export", help="draft scorecard cases -> evals/candidates.csv")
+    sub.add_parser("cleanup", help="remove non-CSP and short recordings, reset failed ones")
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     from .seed import seed_if_demo
@@ -968,6 +1019,10 @@ def _cli():
                   f"{(r['summary'] or r['error'] or '')[:70]}")
     elif a.cmd == "export":
         print(f"Added or filled in {export_candidates()} draft case(s) in evals/candidates.csv")
+    elif a.cmd == "cleanup":
+        result = cleanup_invalid_recordings()
+        print(f"Cleanup complete: {result['deleted_no_csp']} non-CSP recordings deleted, "
+              f"{result['deleted_short']} short recordings deleted, {result['reset_failed']} failed recordings reset")
 
 
 if __name__ == "__main__":
