@@ -944,6 +944,12 @@ def process_recordings():
     return {"started": True, "waiting": recordings.summary_counts().get("new", 0)}
 
 
+@app.post("/api/recordings/cleanup", dependencies=[Depends(allow("admin"))])
+def cleanup_recordings():
+    """Remove non-CSP and short recordings, reset failed ones for reprocessing."""
+    return recordings.cleanup_invalid_recordings()
+
+
 # ------------------------------------------------------------------ integrations (app/integrations.py, INTEGRATION.md)
 class KeyBody(BaseModel):
     name: str
