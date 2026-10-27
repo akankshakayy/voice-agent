@@ -721,6 +721,73 @@ def evaluator_models(hours: int = 24):
     return evaluator.model_performance(hours)
 
 
+# ------------------------------------------------------------------ approvals (Phase 3)
+@app.get("/api/approvals/{approval_id}", dependencies=[Depends(allow(*STAFF))])
+def get_approval(approval_id: int):
+    """Get status of an approval request."""
+    from . import approval_gates
+    a = approval_gates.get_approval(approval_id)
+    if not a:
+        raise HTTPException(404, "approval not found")
+    if a.get("decision_json"):
+        a["decision"] = json.loads(a["decision_json"])
+    if a.get("edited_decision_json"):
+        a["edited_decision"] = json.loads(a["edited_decision_json"])
+    return a
+
+
+class ApprovalAction(BaseModel):
+    approved_by: str | None = None
+    denied_by: str | None = None
+    denial_reason: str | None = None
+    edited_decision: dict | None = None  # If approver modified the decision
+
+
+@app.post("/api/approvals/{approval_id}/approve", dependencies=[Depends(allow(*STAFF))])
+def approve_action(approval_id: int, body: ApprovalAction):
+    """Approve a pending action (optionally with edits)."""
+    from . import approval_gates
+    success = approval_gates.approve(
+        approval_id, body.approved_by or "system", body.edited_decision
+    )
+    if not success:
+        raise HTTPException(400, "could not approve (already decided or not found)")
+    return {"status": "approved", "approval_id": approval_id}
+
+
+@app.post("/api/approvals/{approval_id}/deny", dependencies=[Depends(allow(*STAFF))])
+def deny_action(approval_id: int, body: ApprovalAction):
+    """Deny a pending action."""
+    from . import approval_gates
+    success = approval_gates.deny(
+        approval_id, body.denied_by or "system", body.denial_reason
+    )
+    if not success:
+        raise HTTPException(400, "could not deny (already decided or not found)")
+    return {"status": "denied", "approval_id": approval_id}
+
+
+@app.get("/api/calls/{call_id}/approvals", dependencies=[Depends(allow(*STAFF))])
+def call_approvals(call_id: int):
+    """Get approval audit trail for a call."""
+    from . import approval_gates
+    return approval_gates.audit_trail(call_id)
+
+
+@app.get("/api/approvals/stats", dependencies=[Depends(allow(*STAFF))])
+def approvals_stats(hours: int = 24):
+    """Approval workflow stats (approval rate, common denials, etc.)."""
+    from . import approval_gates
+    return approval_gates.approval_stats(hours)
+
+
+@app.get("/api/tool-registry", dependencies=[Depends(allow(*STAFF))])
+def tool_registry():
+    """Phase 3: Get tool risk registry (which operations need approval)."""
+    from . import approval_gates
+    return approval_gates.TOOL_REGISTRY
+
+
 # ------------------------------------------------------------------ voice
 class Speak(BaseModel):
     text: str

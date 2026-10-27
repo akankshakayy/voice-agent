@@ -103,6 +103,20 @@
   </div>
 </div>
 
+<!-- Approval Modal (Phase 3) -->
+<div id="approvalModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:1000; display:flex; align-items:center; justify-content:center;">
+  <div style="background:var(--surface); border-radius:8px; max-width:600px; width:90%; max-height:80vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3); padding:20px;">
+    <div style="font-size:18px; font-weight:600; margin-bottom:16px;">Action Requires Approval ⚠️</div>
+
+    <div id="approvalContent" style="margin:16px 0; padding:12px; background:var(--surface-alt); border-radius:4px; font-size:12px; line-height:1.6;"></div>
+
+    <div style="margin-top:20px; display:flex; gap:12px; justify-content:flex-end;">
+      <button id="approvalDeny" class="secondary" style="padding:10px 20px;">Deny</button>
+      <button id="approvalApprove" class="primary" style="padding:10px 20px; background:#10b981; border-color:#10b981; color:white;">Approve</button>
+    </div>
+  </div>
+</div>
+
 <script src="static/common.js"></script>
 <script>
 const $ = id => document.getElementById(id);
@@ -285,6 +299,10 @@ function renderEvaluator(trace) {
   const tierTokens = trace.tier_tokens_json ? JSON.parse(trace.tier_tokens_json) : null;
   const totalTierTokens = tierTokens ? Object.values(tierTokens).reduce((a, b) => a + b, 0) : 0;
 
+  // Phase 3: Check if action needs approval
+  const action = output.action;
+  const needsApproval = action === 'create_ticket' || action === 'escalate';
+
   let html = `
     <div class="eval-section">
       <div class="eval-label">Decision Metadata</div>
@@ -293,6 +311,7 @@ function renderEvaluator(trace) {
       <div class="eval-row"><span>Latency</span> <strong>${trace.latency_ms}ms</strong></div>
       <div class="eval-row"><span>Tokens (in/out)</span> <strong>${trace.input_tokens}/${trace.output_tokens}</strong></div>
       ${trace.error ? `<div class="eval-row" style="color:#ef4444;"><span>Error</span> <strong>${esc(trace.error)}</strong></div>` : ''}
+      ${needsApproval ? `<div class="eval-row" style="color:#ef4444;"><span>⚠️ Status</span> <strong>REQUIRES APPROVAL (Phase 3)</strong></div>` : ''}
     </div>
   `;
 
@@ -370,12 +389,81 @@ function renderEvaluator(trace) {
     `;
   }
 
+  // Phase 3: Approval info
+  if (action === 'create_ticket' || action === 'escalate') {
+    html += `
+      <div class="eval-section">
+        <div class="eval-label">⚠️ Approval Required (Phase 3)</div>
+        <div class="eval-row"><span>Action</span> <strong>${esc(action)}</strong></div>
+        <div class="eval-row"><span>Reason</span> <strong>${action === 'create_ticket' ? 'Create support ticket' : 'Escalate to RM'}</strong></div>
+        <div style="margin-top:12px; display:flex; gap:8px;">
+          <button onclick="showApprovalModal(${store.getState().currentCallId}, ${trace.turn_id || '?'}, '${action}', ${JSON.stringify(output).replace(/"/g, '&quot;')})"
+                  style="padding:8px 12px; background:#10b981; color:white; border:none; border-radius:4px; cursor:pointer; font-size:11px;">
+            Show Approval Modal
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
   $('evaluatorPane').innerHTML = html;
 }
 
 store.subscribe(() => {
   renderTraceList();
 });
+
+// ===== Phase 3: Approval Gates =====
+let currentApprovalId = null;
+
+async function showApprovalModal(callId, traceId, action, decision) {
+  // Create approval request
+  const reason = `Action "${action}" from trace #${traceId} needs approval`;
+
+  // For demo, show the modal
+  const modal = document.getElementById('approvalModal');
+  currentApprovalId = null;
+
+  $('approvalContent').innerHTML = `
+    <div><strong>Action:</strong> ${esc(action)}</div>
+    <div><strong>Call:</strong> #${callId}</div>
+    <div><strong>Trace:</strong> #${traceId}</div>
+    <div style="margin-top:12px;"><strong>Proposed decision:</strong></div>
+    <div style="background:var(--surface); padding:8px; margin-top:6px; border-radius:3px; font-family:monospace; font-size:11px; max-height:200px; overflow-y:auto;">
+      ${esc(JSON.stringify(decision, null, 2).slice(0, 500))}
+    </div>
+  `;
+
+  modal.style.display = 'flex';
+
+  // Setup handlers
+  $('approvalApprove').onclick = async () => {
+    // In production: POST /api/approvals/{id}/approve
+    alert('Approval accepted! (This would call /api/approvals/{id}/approve in production)');
+    modal.style.display = 'none';
+  };
+
+  $('approvalDeny').onclick = async () => {
+    // In production: POST /api/approvals/{id}/deny
+    alert('Approval denied! (This would call /api/approvals/{id}/deny in production)');
+    modal.style.display = 'none';
+  };
+}
+
+// Load tool registry
+async function loadToolRegistry() {
+  try {
+    const resp = await fetch('/api/tool-registry');
+    if (resp.ok) {
+      const tools = await resp.json();
+      console.log('Tool registry loaded:', Object.keys(tools));
+    }
+  } catch (e) {
+    console.warn('Could not load tool registry:', e);
+  }
+}
+
+loadToolRegistry();
 </script>
 </body>
 </html>

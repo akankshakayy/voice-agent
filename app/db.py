@@ -116,6 +116,17 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (   -- outbox: one row per event p
     attempts INTEGER DEFAULT 0, next_attempt_at REAL, last_status_code INTEGER, last_error TEXT,
     created_at REAL, delivered_at REAL
 );
+CREATE TABLE IF NOT EXISTS approvals (          -- Phase 3: approval workflow audit trail
+    id INTEGER PRIMARY KEY, call_id INTEGER, turn_id INTEGER,
+    action TEXT,               -- create_ticket, escalate, etc. (from tool registry)
+    status TEXT,               -- pending | approved | denied
+    reason TEXT,               -- why approval was requested
+    decision_json TEXT,        -- the agent's proposed decision
+    edited_decision_json TEXT, -- if approver changed it
+    created_at REAL, expires_at REAL,
+    approved_by TEXT, approved_at REAL,
+    denied_by TEXT, denied_at REAL, denial_reason TEXT
+);
 CREATE TABLE IF NOT EXISTS traces (           -- every engine decision, frozen as it happened (app/telemetry.py)
     id INTEGER PRIMARY KEY, call_id INTEGER, turn_id INTEGER, ts REAL, engine TEXT, model TEXT,
     prompt_version TEXT,       -- fingerprint of the prompt code; metrics are split by it
