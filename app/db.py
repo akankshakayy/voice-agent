@@ -145,6 +145,70 @@ CREATE TABLE IF NOT EXISTS context_wipes (    -- Phase 4: audit trail of context
     chip_value TEXT,           -- the actual value that was wiped (for audit)
     reason TEXT                -- why it was wiped (compliance, redaction, etc.)
 );
+CREATE TABLE IF NOT EXISTS prompt_versions (  -- Phase 5: track all unique prompt code versions
+    id INTEGER PRIMARY KEY, prompt_hash TEXT UNIQUE,
+    tier_high TEXT,            -- system instructions (frozen core)
+    tier_medium_template TEXT, -- template with {csp}, {tickets}, {slots} placeholders
+    tier_low_template TEXT,    -- template with {intent}, {confidence}, {history}
+    full_prompt TEXT,          -- complete generated prompt (for display/archive)
+    created_at REAL, created_by TEXT, notes TEXT,
+    status TEXT,               -- draft | baseline | active | deprecated
+    git_commit TEXT,           -- git SHA if deployed from repo
+
+    -- Baseline scores (from evals run)
+    baseline_intent_pct REAL, baseline_action_pct REAL, baseline_details_pct REAL,
+    baseline_latency_p95 REAL, baseline_cases_run INTEGER,
+    baseline_accepted_at REAL, baseline_accepted_by TEXT
+);
+CREATE TABLE IF NOT EXISTS prompt_drifts (        -- Phase 5: detected drifts from baseline
+    id INTEGER PRIMARY KEY,
+    previous_version_id INTEGER, current_version_id INTEGER,
+    detected_at REAL, detected_by TEXT,           -- "automatic" or ops email
+    drift_type TEXT,           -- code_changed | behavior_diverged | quality_drop
+    prompt_diff TEXT,          -- unified diff of tier_high/medium/low
+
+    -- Live metrics (observed in recent traces)
+    live_intent_pct REAL, live_action_pct REAL, live_details_pct REAL,
+    live_latency_p95 REAL, live_calls_analyzed INTEGER,
+
+    -- Replay results
+    replay_status TEXT,        -- pending | in_progress | complete
+    replay_results_json TEXT,  -- {baseline: {...}, candidate: {...}, diff: {...}}
+
+    status TEXT,               -- flagged | under_review | approved | rejected
+    decision_json TEXT,        -- approver's decision + any edits
+    approved_by TEXT, approved_at REAL,
+    rejected_by TEXT, rejected_at REAL, rejection_reason TEXT,
+
+    FOREIGN KEY (previous_version_id) REFERENCES prompt_versions(id),
+    FOREIGN KEY (current_version_id) REFERENCES prompt_versions(id)
+);
+CREATE TABLE IF NOT EXISTS test_runs (            -- Phase 5: individual test case results
+    id INTEGER PRIMARY KEY,
+    prompt_version_id INTEGER, test_case_id TEXT,
+    run_timestamp REAL, eval_engine TEXT, eval_model TEXT,
+    intent_correct BOOLEAN, action_correct BOOLEAN,
+    slots_correct_json TEXT,   -- {slot_key: true/false}
+    latency_ms REAL,
+    call_id INTEGER,           -- if from a real call
+    synthetic BOOLEAN,         -- if from evals replay
+
+    FOREIGN KEY (prompt_version_id) REFERENCES prompt_versions(id),
+    PRIMARY KEY (prompt_version_id, test_case_id, run_timestamp)
+);
+CREATE TABLE IF NOT EXISTS replay_requests (     -- Phase 5: async replay orchestration
+    id INTEGER PRIMARY KEY,
+    drift_id INTEGER, requested_at REAL, requested_by TEXT,
+    baseline_version_id INTEGER, candidate_version_id INTEGER,
+    status TEXT,               -- pending | running | complete | failed
+    test_count INTEGER, started_at REAL, completed_at REAL,
+    results_json TEXT,         -- {baseline: {...}, candidate: {...}, diff: {...}}
+    error TEXT,
+
+    FOREIGN KEY (drift_id) REFERENCES prompt_drifts(id),
+    FOREIGN KEY (baseline_version_id) REFERENCES prompt_versions(id),
+    FOREIGN KEY (candidate_version_id) REFERENCES prompt_versions(id)
+);
 CREATE TABLE IF NOT EXISTS corrections (      -- a person changed something the agent produced (app/telemetry.py)
     id INTEGER PRIMARY KEY, ts REAL, source TEXT, ref_id INTEGER, call_id INTEGER,
     field TEXT,                -- summary | category | detail:<slot>
@@ -155,6 +219,15 @@ CREATE TABLE IF NOT EXISTS misheard_blocked (  -- misheard-word pairs kept out o
 );
 CREATE INDEX IF NOT EXISTS idx_traces_call ON traces(call_id);
 CREATE INDEX IF NOT EXISTS idx_context_wipes_trace ON context_wipes(trace_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_hash ON prompt_versions(prompt_hash);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_status ON prompt_versions(status);
+CREATE INDEX IF NOT EXISTS idx_prompt_drifts_previous ON prompt_drifts(previous_version_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_drifts_current ON prompt_drifts(current_version_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_drifts_status ON prompt_drifts(status, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_test_runs_version ON test_runs(prompt_version_id);
+CREATE INDEX IF NOT EXISTS idx_test_runs_case ON test_runs(test_case_id);
+CREATE INDEX IF NOT EXISTS idx_replay_requests_drift ON replay_requests(drift_id);
+CREATE INDEX IF NOT EXISTS idx_replay_requests_status ON replay_requests(status);
 CREATE INDEX IF NOT EXISTS idx_corrections_ref ON corrections(source, ref_id);
 CREATE INDEX IF NOT EXISTS idx_auth_events_email ON auth_events(email, event, ts);
 CREATE INDEX IF NOT EXISTS idx_deliveries_due ON webhook_deliveries(status, next_attempt_at);

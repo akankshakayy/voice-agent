@@ -876,6 +876,96 @@ def wipes_stats(hours: int = 24):
     return context_wipe.wipe_stats(hours)
 
 
+# ------------------------------------------------------------------ drift detection & repair (Phase 5)
+@app.get("/api/drifts/pending", dependencies=[Depends(allow("admin", "ops"))])
+def get_pending_drifts():
+    """Phase 5: Get all pending drift detections awaiting review."""
+    from . import drift_repair
+    return drift_repair.get_pending_drifts()
+
+
+class PromptVersionInfo(BaseModel):
+    version_hash: str
+    prompt_code: str
+    created_by: str = "system"
+
+
+@app.post("/api/prompt-versions", dependencies=[Depends(allow("admin", "ops"))])
+def register_prompt_version(body: PromptVersionInfo):
+    """Phase 5: Register a new prompt code version."""
+    from . import drift_repair, llm_engine
+
+    version_id = drift_repair.register_prompt_version(
+        body.version_hash,
+        body.prompt_code,
+        llm_engine.AGENT_TURN_TOOL,
+        body.created_by,
+    )
+    return {"version_id": version_id, "version_hash": body.version_hash}
+
+
+@app.get("/api/prompt-versions/{version_hash}/diff/{other_hash}", dependencies=[Depends(allow("admin", "ops"))])
+def get_diff(version_hash: str, other_hash: str):
+    """Phase 5: Get diff between two prompt versions."""
+    from . import drift_repair
+
+    diff = drift_repair.get_prompt_diff(version_hash, other_hash)
+    if not diff:
+        raise HTTPException(404, "one or both versions not found")
+    return diff
+
+
+@app.get("/api/drifts/{drift_id}", dependencies=[Depends(allow("admin", "ops"))])
+def get_drift_detail(drift_id: int):
+    """Phase 5: Get details of a specific drift."""
+    drift = db.q("SELECT * FROM prompt_drifts WHERE id=?", (drift_id,), one=True)
+    if not drift:
+        raise HTTPException(404, "drift not found")
+
+    # Deserialize JSON fields
+    if drift.get("previous_baseline_json"):
+        drift["previous_baseline"] = json.loads(drift.pop("previous_baseline_json"))
+    if drift.get("current_scores_json"):
+        drift["current_scores"] = json.loads(drift.pop("current_scores_json"))
+
+    return drift
+
+
+class DriftAction(BaseModel):
+    accepted: bool = True
+    reason: str = ""
+
+
+@app.post("/api/drifts/{drift_id}/accept", dependencies=[Depends(allow("admin", "ops"))])
+def accept_drift(drift_id: int, request: Request, body: DriftAction):
+    """Phase 5: Accept or reject a detected drift."""
+    from . import drift_repair
+
+    user_email = request.state.user.get("email", "system") if request.state.user else "system"
+
+    if body.accepted:
+        success = drift_repair.accept_drift(drift_id, user_email, body.reason)
+        if not success:
+            raise HTTPException(400, "could not accept drift")
+        return {"status": "accepted", "drift_id": drift_id}
+    else:
+        success = drift_repair.reject_drift(drift_id, user_email, body.reason)
+        if not success:
+            raise HTTPException(400, "could not reject drift")
+        return {"status": "rejected", "drift_id": drift_id}
+
+
+@app.get("/api/prompt-versions/{version_hash}/baseline", dependencies=[Depends(allow("admin", "ops"))])
+def get_baseline(version_hash: str):
+    """Phase 5: Get accepted baseline scores for a prompt version."""
+    from . import drift_repair
+
+    baseline = drift_repair.get_baseline_scores(version_hash)
+    if not baseline:
+        raise HTTPException(404, "no accepted baseline for this version")
+    return baseline
+
+
 # ------------------------------------------------------------------ voice
 class Speak(BaseModel):
     text: str
