@@ -904,12 +904,12 @@ def register_prompt_version(body: PromptVersionInfo):
     return {"version_id": version_id, "version_hash": body.version_hash}
 
 
-@app.get("/api/prompt-versions/{version_hash}/diff/{other_hash}", dependencies=[Depends(allow("admin", "ops"))])
-def get_diff(version_hash: str, other_hash: str):
-    """Phase 5: Get diff between two prompt versions."""
+@app.get("/api/prompt-versions/{version_id_1}/diff/{version_id_2}", dependencies=[Depends(allow("admin", "ops"))])
+def get_diff(version_id_1: int, version_id_2: int):
+    """Phase 5: Get diff between two prompt versions by id."""
     from . import drift_repair
 
-    diff = drift_repair.get_prompt_diff(version_hash, other_hash)
+    diff = drift_repair.get_prompt_diff(version_id_1, version_id_2)
     if not diff:
         raise HTTPException(404, "one or both versions not found")
     return diff
@@ -918,15 +918,23 @@ def get_diff(version_hash: str, other_hash: str):
 @app.get("/api/drifts/{drift_id}", dependencies=[Depends(allow("admin", "ops"))])
 def get_drift_detail(drift_id: int):
     """Phase 5: Get details of a specific drift."""
-    drift = db.q("SELECT * FROM prompt_drifts WHERE id=?", (drift_id,), one=True)
+    drift = db.q(
+        """SELECT pd.*, pv1.version_hash as previous_version_hash, pv2.version_hash as current_version_hash
+           FROM prompt_drifts pd
+           LEFT JOIN prompt_versions pv1 ON pd.previous_version_id = pv1.id
+           LEFT JOIN prompt_versions pv2 ON pd.current_version_id = pv2.id
+           WHERE pd.id=?""",
+        (drift_id,),
+        one=True
+    )
     if not drift:
         raise HTTPException(404, "drift not found")
 
-    # Deserialize JSON fields
-    if drift.get("previous_baseline_json"):
-        drift["previous_baseline"] = json.loads(drift.pop("previous_baseline_json"))
-    if drift.get("current_scores_json"):
-        drift["current_scores"] = json.loads(drift.pop("current_scores_json"))
+    # Deserialize JSON fields if they exist
+    if drift.get("replay_results_json"):
+        drift["replay_results"] = json.loads(drift.get("replay_results_json"))
+    if drift.get("decision_json"):
+        drift["decision"] = json.loads(drift.get("decision_json"))
 
     return drift
 
