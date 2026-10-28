@@ -146,19 +146,24 @@ CREATE TABLE IF NOT EXISTS context_wipes (    -- Phase 4: audit trail of context
     reason TEXT                -- why it was wiped (compliance, redaction, etc.)
 );
 CREATE TABLE IF NOT EXISTS prompt_versions (  -- Phase 5: track all unique prompt code versions
-    id INTEGER PRIMARY KEY, prompt_hash TEXT UNIQUE,
+    id INTEGER PRIMARY KEY, version_hash TEXT UNIQUE,
+    prompt_code TEXT,          -- full source code of _system_prompt function
+    tool_schema_json TEXT,     -- AGENT_TURN_TOOL dict
     tier_high TEXT,            -- system instructions (frozen core)
     tier_medium_template TEXT, -- template with {csp}, {tickets}, {slots} placeholders
     tier_low_template TEXT,    -- template with {intent}, {confidence}, {history}
     full_prompt TEXT,          -- complete generated prompt (for display/archive)
     created_at REAL, created_by TEXT, notes TEXT,
     status TEXT,               -- draft | baseline | active | deprecated
-    git_commit TEXT,           -- git SHA if deployed from repo
-
-    -- Baseline scores (from evals run)
-    baseline_intent_pct REAL, baseline_action_pct REAL, baseline_details_pct REAL,
-    baseline_latency_p95 REAL, baseline_cases_run INTEGER,
-    baseline_accepted_at REAL, baseline_accepted_by TEXT
+    git_commit TEXT            -- git SHA if deployed from repo
+);
+CREATE TABLE IF NOT EXISTS scorecard_baselines (  -- Phase 5: eval results for each version
+    id INTEGER PRIMARY KEY, version_hash TEXT,
+    eval_timestamp REAL, results_json TEXT,  -- CSV rows as JSON array
+    summary_json TEXT,         -- summary.json dict with overall scores
+    eval_by TEXT,              -- who ran the eval
+    accepted_at REAL, accepted_by TEXT,     -- when the baseline was approved
+    FOREIGN KEY (version_hash) REFERENCES prompt_versions(version_hash)
 );
 CREATE TABLE IF NOT EXISTS prompt_drifts (        -- Phase 5: detected drifts from baseline
     id INTEGER PRIMARY KEY,
@@ -184,9 +189,8 @@ CREATE TABLE IF NOT EXISTS prompt_drifts (        -- Phase 5: detected drifts fr
     FOREIGN KEY (current_version_id) REFERENCES prompt_versions(id)
 );
 CREATE TABLE IF NOT EXISTS test_runs (            -- Phase 5: individual test case results
-    id INTEGER PRIMARY KEY,
-    prompt_version_id INTEGER, test_case_id TEXT,
-    run_timestamp REAL, eval_engine TEXT, eval_model TEXT,
+    prompt_version_id INTEGER, test_case_id TEXT, run_timestamp REAL,
+    eval_engine TEXT, eval_model TEXT,
     intent_correct BOOLEAN, action_correct BOOLEAN,
     slots_correct_json TEXT,   -- {slot_key: true/false}
     latency_ms REAL,
@@ -219,7 +223,7 @@ CREATE TABLE IF NOT EXISTS misheard_blocked (  -- misheard-word pairs kept out o
 );
 CREATE INDEX IF NOT EXISTS idx_traces_call ON traces(call_id);
 CREATE INDEX IF NOT EXISTS idx_context_wipes_trace ON context_wipes(trace_id);
-CREATE INDEX IF NOT EXISTS idx_prompt_versions_hash ON prompt_versions(prompt_hash);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_hash ON prompt_versions(version_hash);
 CREATE INDEX IF NOT EXISTS idx_prompt_versions_status ON prompt_versions(status);
 CREATE INDEX IF NOT EXISTS idx_prompt_drifts_previous ON prompt_drifts(previous_version_id);
 CREATE INDEX IF NOT EXISTS idx_prompt_drifts_current ON prompt_drifts(current_version_id);
@@ -311,6 +315,20 @@ def conn() -> sqlite3.Connection:
             _conn.commit()
         _add_columns(_conn, "sessions", {"last_seen_at": "REAL", "ip": "TEXT", "user_agent": "TEXT"})
         _add_columns(_conn, "traces", {"tier_tokens_json": "TEXT"})  # Phase 1: context tier accounting
+        # Phase 5: Drift detection - handle old prompt_versions that may have prompt_hash instead of version_hash
+        try:
+            table_exists = _conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='prompt_versions'").fetchone()
+            if table_exists:
+                cols = {r[1] for r in _conn.execute("PRAGMA table_info(prompt_versions)")}
+                if "prompt_hash" in cols and "version_hash" not in cols:
+                    _conn.execute("ALTER TABLE prompt_versions RENAME COLUMN prompt_hash TO version_hash")
+                    _conn.commit()
+                _add_columns(_conn, "prompt_versions", {
+                    "prompt_code": "TEXT",
+                    "tool_schema_json": "TEXT"
+                })
+        except Exception as e:
+            pass  # May fail if migrations were already applied or table doesn't exist yet
     return _conn
 
 

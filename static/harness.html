@@ -188,9 +188,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
   await loadConfig();
 
   try {
-    const resp = await fetch('/api/calls');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const calls = await resp.json();
+    const calls = await api('api/calls');
 
     if (calls.length === 0) {
       $('status').textContent = 'No calls found';
@@ -224,10 +222,7 @@ $('refreshBtn').addEventListener('click', () => {
 async function loadTraces(callId) {
   try {
     $('status').textContent = 'Loading traces…';
-    const resp = await fetch(`/api/calls/${callId}/traces`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-    allTraces = await resp.json();
+    allTraces = await api(`api/calls/${callId}/traces`);
     store.setState({ traces: allTraces, currentCallId: callId, selectedIdx: -1 });
 
     $('traceCount').textContent = `${allTraces.length} trace${allTraces.length === 1 ? '' : 's'}`;
@@ -492,31 +487,29 @@ async function showApprovalModal(callId, traceId, action, decision) {
   let approvalId = null;
   try {
     // Try to find existing pending approval first
-    const existingResp = await fetch(`/api/calls/${callId}/approvals`);
-    if (existingResp.ok) {
-      const approvals = await existingResp.json();
+    try {
+      const approvals = await api(`api/calls/${callId}/approvals`);
       const pending = approvals.find(a => a.status === 'pending' && a.turn_id == traceId && a.action === action);
       if (pending) {
         approvalId = pending.id;
       }
+    } catch (e) {
+      // No existing approvals, will create new one
     }
 
     // If not found, create new approval request
     if (!approvalId) {
-      const createResp = await fetch('/api/approvals/request', {
+      const result = await api('api/approvals/request', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           call_id: callId,
           turn_id: traceId,
           action: action,
           decision: decision,
           reason: `Harness review for trace ${traceId}`,
-        }),
+        },
       });
-
-      if (createResp.ok) {
-        const result = await createResp.json();
+      if (result.approval_id) {
         approvalId = result.approval_id;
       }
     }
@@ -537,23 +530,14 @@ async function showApprovalModal(callId, traceId, action, decision) {
     $('approvalApprove').textContent = 'Approving...';
 
     try {
-      const resp = await fetch(`/api/approvals/${approvalId}/approve`, {
+      await api(`api/approvals/${approvalId}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved_by: 'harness-ops' }),
+        body: { approved_by: 'harness-ops' },
       });
-
-      if (resp.ok) {
-        alert('✓ Action approved!');
-        modal.style.display = 'none';
-      } else {
-        const err = await resp.text();
-        alert('Failed to approve: ' + err);
-        $('approvalApprove').disabled = false;
-        $('approvalApprove').textContent = 'Approve';
-      }
+      alert('✓ Action approved!');
+      modal.style.display = 'none';
     } catch (e) {
-      alert('Error: ' + e.message);
+      alert('Failed to approve: ' + e.message);
       $('approvalApprove').disabled = false;
       $('approvalApprove').textContent = 'Approve';
     }
@@ -564,21 +548,12 @@ async function showApprovalModal(callId, traceId, action, decision) {
     $('approvalDeny').textContent = 'Denying...';
 
     try {
-      const resp = await fetch(`/api/approvals/${approvalId}/deny`, {
+      await api(`api/approvals/${approvalId}/deny`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ denied_by: 'harness-ops', denial_reason: 'Rejected in harness review' }),
+        body: { denied_by: 'harness-ops', denial_reason: 'Rejected in harness review' },
       });
-
-      if (resp.ok) {
-        alert('✓ Action denied!');
-        modal.style.display = 'none';
-      } else {
-        const err = await resp.text();
-        alert('Failed to deny: ' + err);
-        $('approvalDeny').disabled = false;
-        $('approvalDeny').textContent = 'Deny';
-      }
+      alert('✓ Action denied!');
+      modal.style.display = 'none';
     } catch (e) {
       alert('Error: ' + e.message);
       $('approvalDeny').disabled = false;
@@ -590,11 +565,8 @@ async function showApprovalModal(callId, traceId, action, decision) {
 // Load tool registry
 async function loadToolRegistry() {
   try {
-    const resp = await fetch('/api/tool-registry');
-    if (resp.ok) {
-      const tools = await resp.json();
-      console.log('Tool registry loaded:', Object.keys(tools));
-    }
+    const tools = await api('api/tool-registry');
+    console.log('Tool registry loaded:', Object.keys(tools));
   } catch (e) {
     console.warn('Could not load tool registry:', e);
   }
@@ -607,14 +579,7 @@ let currentWipeChip = null;
 
 async function loadChips(traceId, wipedChips) {
   try {
-    const resp = await fetch(`/api/traces/${traceId}/chips`);
-    if (!resp.ok) {
-      console.warn('Could not load chips:', resp.status);
-      $('chipsContainer').innerHTML = '<div style="color:var(--muted); font-size:11px;">Could not load chips</div>';
-      return;
-    }
-
-    const data = await resp.json();
+    const data = await api(`api/traces/${traceId}/chips`);
     renderChips(data.chips || {}, data.wiped || wipedChips || {}, traceId);
   } catch (e) {
     console.warn('Error loading chips:', e);
@@ -729,27 +694,19 @@ $('wipeConfirm').addEventListener('click', async () => {
   $('wipeConfirm').textContent = 'Wiping...';
 
   try {
-    const resp = await fetch(`/api/traces/${currentWipeChip.traceId}/wipe`, {
+    await api(`api/traces/${currentWipeChip.traceId}/wipe`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: {
         chip_type: currentWipeChip.chipType,
         chip_id: currentWipeChip.chipId,
         reason: $('wipeReason').value,
-      }),
+      },
     });
-
-    if (resp.ok) {
-      modal.style.display = 'none';
-      // Reload current trace
-      const currentTrace = allTraces[store.getState().selectedIdx];
-      if (currentTrace && currentTrace.id === currentWipeChip.traceId) {
-        renderEvaluator(currentTrace);
-      }
-    } else {
-      alert('Failed to wipe chip: ' + resp.statusText);
-      $('wipeConfirm').disabled = false;
-      $('wipeConfirm').textContent = 'Wipe Chip';
+    modal.style.display = 'none';
+    // Reload current trace
+    const currentTrace = allTraces[store.getState().selectedIdx];
+    if (currentTrace && currentTrace.id === currentWipeChip.traceId) {
+      renderEvaluator(currentTrace);
     }
   } catch (e) {
     alert('Error wiping chip: ' + e.message);
