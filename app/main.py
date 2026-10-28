@@ -728,6 +728,25 @@ def evaluator_models(hours: int = 24):
 
 
 # ------------------------------------------------------------------ approvals (Phase 3)
+class ApprovalRequest(BaseModel):
+    call_id: int
+    turn_id: int
+    action: str
+    decision: dict
+    reason: str | None = None
+
+
+@app.post("/api/approvals/request", dependencies=[Depends(allow(*STAFF))])
+def request_approval(body: ApprovalRequest):
+    """Create a new approval request (from harness UI for retroactive approval)."""
+    from . import approval_gates
+
+    approval_id = approval_gates.request_approval(
+        body.call_id, body.turn_id, body.action, body.decision, body.reason
+    )
+    return {"approval_id": approval_id, "status": "pending"}
+
+
 @app.get("/api/approvals/{approval_id}", dependencies=[Depends(allow(*STAFF))])
 def get_approval(approval_id: int):
     """Get status of an approval request."""

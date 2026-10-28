@@ -466,12 +466,7 @@ store.subscribe(() => {
 let currentApprovalId = null;
 
 async function showApprovalModal(callId, traceId, action, decision) {
-  // Create approval request
-  const reason = `Action "${action}" from trace #${traceId} needs approval`;
-
-  // For demo, show the modal
   const modal = document.getElementById('approvalModal');
-  currentApprovalId = null;
 
   $('approvalContent').innerHTML = `
     <div><strong>Action:</strong> ${esc(action)}</div>
@@ -484,18 +479,107 @@ async function showApprovalModal(callId, traceId, action, decision) {
   `;
 
   modal.style.display = 'flex';
+  $('approvalApprove').disabled = false;
+  $('approvalDeny').disabled = false;
+  $('approvalApprove').textContent = 'Approve';
+  $('approvalDeny').textContent = 'Deny';
+
+  // Create or find approval request
+  let approvalId = null;
+  try {
+    // Try to find existing pending approval first
+    const existingResp = await fetch(`/api/calls/${callId}/approvals`);
+    if (existingResp.ok) {
+      const approvals = await existingResp.json();
+      const pending = approvals.find(a => a.status === 'pending' && a.turn_id == traceId && a.action === action);
+      if (pending) {
+        approvalId = pending.id;
+      }
+    }
+
+    // If not found, create new approval request
+    if (!approvalId) {
+      const createResp = await fetch('/api/approvals/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          call_id: callId,
+          turn_id: traceId,
+          action: action,
+          decision: decision,
+          reason: `Harness review for trace ${traceId}`,
+        }),
+      });
+
+      if (createResp.ok) {
+        const result = await createResp.json();
+        approvalId = result.approval_id;
+      }
+    }
+  } catch (e) {
+    console.warn('Could not create/find approval:', e);
+  }
+
+  if (!approvalId) {
+    $('approvalContent').innerHTML += '<div style="margin-top:12px; color:#ef4444; font-size:11px;">⚠️ Could not create approval request. Please refresh and try again.</div>';
+    $('approvalApprove').disabled = true;
+    $('approvalDeny').disabled = true;
+    return;
+  }
 
   // Setup handlers
   $('approvalApprove').onclick = async () => {
-    // In production: POST /api/approvals/{id}/approve
-    alert('Approval accepted! (This would call /api/approvals/{id}/approve in production)');
-    modal.style.display = 'none';
+    $('approvalApprove').disabled = true;
+    $('approvalApprove').textContent = 'Approving...';
+
+    try {
+      const resp = await fetch(`/api/approvals/${approvalId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved_by: 'harness-ops' }),
+      });
+
+      if (resp.ok) {
+        alert('✓ Action approved!');
+        modal.style.display = 'none';
+      } else {
+        const err = await resp.text();
+        alert('Failed to approve: ' + err);
+        $('approvalApprove').disabled = false;
+        $('approvalApprove').textContent = 'Approve';
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+      $('approvalApprove').disabled = false;
+      $('approvalApprove').textContent = 'Approve';
+    }
   };
 
   $('approvalDeny').onclick = async () => {
-    // In production: POST /api/approvals/{id}/deny
-    alert('Approval denied! (This would call /api/approvals/{id}/deny in production)');
-    modal.style.display = 'none';
+    $('approvalDeny').disabled = true;
+    $('approvalDeny').textContent = 'Denying...';
+
+    try {
+      const resp = await fetch(`/api/approvals/${approvalId}/deny`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ denied_by: 'harness-ops', denial_reason: 'Rejected in harness review' }),
+      });
+
+      if (resp.ok) {
+        alert('✓ Action denied!');
+        modal.style.display = 'none';
+      } else {
+        const err = await resp.text();
+        alert('Failed to deny: ' + err);
+        $('approvalDeny').disabled = false;
+        $('approvalDeny').textContent = 'Deny';
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+      $('approvalDeny').disabled = false;
+      $('approvalDeny').textContent = 'Deny';
+    }
   };
 }
 
