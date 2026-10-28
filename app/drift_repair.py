@@ -3,9 +3,13 @@
 Track prompt code versions, store scorecard baselines, detect behavior drift,
 and allow operators to accept new versions as correct.
 """
+import hashlib
+import inspect
 import json
 import time
 from . import db
+
+_active_version_id = None  # Cached current active version
 
 
 def register_prompt_version(version_hash: str, prompt_code: str, tool_schema: dict, created_by: str) -> int:
@@ -258,3 +262,65 @@ def _system_prompt_v{version_hash[:8]}(state: dict):
     {version["prompt_code"]}
 '''
     return code
+
+
+def track_prompt_version(prompt_version_str: str) -> dict | None:
+    """Track a prompt version and detect code-based drift.
+
+    Called after every decision with the prompt_version from telemetry.
+    Registers new versions and detects when the prompt code changes.
+
+    Args:
+        prompt_version_str: the short hash from telemetry.prompt_version()
+
+    Returns:
+        dict with drift_id if drift detected, None otherwise
+    """
+    global _active_version_id
+
+    # Look up this version in the database
+    version = db.q(
+        "SELECT id FROM prompt_versions WHERE version_hash=?",
+        (prompt_version_str,),
+        one=True
+    )
+
+    if not version:
+        # New version detected - register it
+        try:
+            from . import llm_engine
+            src = inspect.getsource(llm_engine._system_prompt) + inspect.getsource(llm_engine._build_messages) \
+                + json.dumps(llm_engine.AGENT_TURN_TOOL, sort_keys=True)
+
+            version_id = register_prompt_version(
+                prompt_version_str,
+                inspect.getsource(llm_engine._system_prompt),
+                llm_engine.AGENT_TURN_TOOL,
+                "system",
+            )
+            version = {"id": version_id}
+        except Exception as e:
+            # If we can't register it, just skip drift detection
+            return None
+    else:
+        version_id = version["id"]
+
+    # If this is a new active version, check for drift
+    if _active_version_id is None or _active_version_id != version_id:
+        if _active_version_id is not None:
+            # We have a previous active version - detect drift
+            drift_id = detect_drift(
+                _active_version_id,
+                version_id,
+                {  # Live scores will be filled in by harness review
+                    "live_calls_analyzed": 0,
+                },
+                detected_by="automatic",
+            )
+            _active_version_id = version_id
+            return {"drift_id": drift_id} if drift_id else None
+        else:
+            # First version we've seen
+            _active_version_id = version_id
+
+    return None
