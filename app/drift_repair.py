@@ -105,66 +105,55 @@ def get_baseline_scores(version_hash: str) -> dict | None:
 
 
 def detect_drift(
-    old_version: str,
-    new_version: str,
-    old_summary: dict,
-    new_summary: dict,
+    previous_version_id: int,
+    current_version_id: int,
+    live_scores: dict,
     detected_by: str = "system",
 ) -> int | None:
-    """Detect drift between two prompt versions based on scorecard differences.
+    """Detect drift between two prompt versions based on live call metrics.
 
     Args:
-        old_version: previous prompt version hash
-        new_version: current prompt version hash
-        old_summary: previous scorecard summary
-        new_summary: current scorecard summary
-        detected_by: who detected it
+        previous_version_id: database id of previous version
+        current_version_id: database id of current version
+        live_scores: dict with live_intent_pct, live_action_pct, live_details_pct, live_latency_p95, live_calls_analyzed
+        detected_by: who detected it ("automatic" or ops email)
 
     Returns:
         drift id if drift detected, None if no significant drift
     """
-    # Simple heuristic: check if understanding scores dropped significantly
-    old_understanding = old_summary.get("understanding_from_audio", {}).get("details_pct", 100)
-    new_understanding = new_summary.get("understanding_from_audio", {}).get("details_pct", 100)
+    # Check if drift already exists
+    existing = db.q(
+        "SELECT id FROM prompt_drifts WHERE previous_version_id=? AND current_version_id=? AND status='flagged'",
+        (previous_version_id, current_version_id),
+        one=True
+    )
+    if existing:
+        return existing["id"]
 
-    # Flag drift if understanding dropped by >5% or latency increased >10%
-    understanding_drop = (old_understanding or 100) - (new_understanding or 100)
-    old_latency = old_summary.get("timing_s", {}).get("heard_llm_s", {}).get("p50")
-    new_latency = new_summary.get("timing_s", {}).get("heard_llm_s", {}).get("p50")
-    latency_increase = 0
-    if old_latency and new_latency:
-        latency_increase = ((new_latency - old_latency) / old_latency * 100)
-
-    is_drift = understanding_drop > 5 or latency_increase > 10
-
-    if not is_drift:
-        return None
-
-    # Create diff summary
-    diff_summary = f"Understanding: {old_understanding}% → {new_understanding}% ({understanding_drop:+.1f}%)"
-    if latency_increase:
-        diff_summary += f" | Latency: +{latency_increase:.1f}%"
-
-    # Store drift record
+    # Store drift record (initially flagged, awaiting review)
     db.x(
-        """INSERT INTO prompt_drifts(from_version, to_version, detected_at, detected_by, diff_summary,
-                                     previous_baseline_json, current_scores_json, status)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO prompt_drifts(previous_version_id, current_version_id, detected_at, detected_by,
+                                     live_intent_pct, live_action_pct, live_details_pct, live_latency_p95, live_calls_analyzed,
+                                     drift_type, status)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            old_version,
-            new_version,
+            previous_version_id,
+            current_version_id,
             time.time(),
             detected_by,
-            diff_summary,
-            json.dumps(old_summary, ensure_ascii=False, default=str),
-            json.dumps(new_summary, ensure_ascii=False, default=str),
-            "detected",
+            live_scores.get("live_intent_pct"),
+            live_scores.get("live_action_pct"),
+            live_scores.get("live_details_pct"),
+            live_scores.get("live_latency_p95"),
+            live_scores.get("live_calls_analyzed"),
+            live_scores.get("drift_type", "code_changed"),
+            "flagged",
         ),
     )
 
     return db.q(
-        "SELECT id FROM prompt_drifts WHERE from_version=? AND to_version=? ORDER BY detected_at DESC LIMIT 1",
-        (old_version, new_version),
+        "SELECT id FROM prompt_drifts WHERE previous_version_id=? AND current_version_id=? ORDER BY detected_at DESC LIMIT 1",
+        (previous_version_id, current_version_id),
         one=True
     )["id"]
 
@@ -172,12 +161,17 @@ def detect_drift(
 def get_pending_drifts() -> list[dict]:
     """Get all pending drift detections awaiting operator review."""
     return db.q(
-        "SELECT * FROM prompt_drifts WHERE status='detected' ORDER BY detected_at DESC"
+        """SELECT pd.*, pv1.version_hash as previous_hash, pv2.version_hash as current_hash
+           FROM prompt_drifts pd
+           LEFT JOIN prompt_versions pv1 ON pd.previous_version_id = pv1.id
+           LEFT JOIN prompt_versions pv2 ON pd.current_version_id = pv2.id
+           WHERE pd.status IN ('flagged', 'under_review')
+           ORDER BY pd.detected_at DESC"""
     )
 
 
 def accept_drift(drift_id: int, accepted_by: str, reason: str = "") -> bool:
-    """Accept a detected drift and update baseline to new version.
+    """Accept a detected drift and mark the new version as approved.
 
     Args:
         drift_id: the drift to accept
@@ -188,31 +182,19 @@ def accept_drift(drift_id: int, accepted_by: str, reason: str = "") -> bool:
         True if successful
     """
     drift = db.q("SELECT * FROM prompt_drifts WHERE id=?", (drift_id,), one=True)
-    if not drift or drift["status"] != "detected":
+    if not drift or drift["status"] not in ("flagged", "under_review"):
         return False
 
-    # Mark drift as accepted
-    db.update(
-        "prompt_drifts",
-        drift_id,
-        status="accepted",
-        accepted_at=time.time(),
-        accepted_by=accepted_by,
-        acceptance_reason=reason,
-    )
-
-    # Accept the new baseline scores
-    new_summary = json.loads(drift["current_scores_json"])
-    db.update(
-        "scorecard_baselines",
-        db.q(
-            "SELECT id FROM scorecard_baselines WHERE version_hash=? ORDER BY eval_timestamp DESC LIMIT 1",
-            (drift["to_version"],),
-            one=True
-        )["id"],
-        accepted_at=time.time(),
-        accepted_by=accepted_by,
-        accepted_reason=reason,
+    # Mark drift as approved
+    db.x(
+        """UPDATE prompt_drifts SET status='approved', approved_by=?, approved_at=?, decision_json=?
+           WHERE id=?""",
+        (
+            accepted_by,
+            time.time(),
+            json.dumps({"reason": reason, "accepted_at": time.time()}),
+            drift_id,
+        ),
     )
 
     return True
@@ -221,44 +203,43 @@ def accept_drift(drift_id: int, accepted_by: str, reason: str = "") -> bool:
 def reject_drift(drift_id: int, rejected_by: str, reason: str = "") -> bool:
     """Reject a detected drift (keep using old version)."""
     drift = db.q("SELECT * FROM prompt_drifts WHERE id=?", (drift_id,), one=True)
-    if not drift or drift["status"] != "detected":
+    if not drift or drift["status"] not in ("flagged", "under_review"):
         return False
 
-    db.update(
-        "prompt_drifts",
-        drift_id,
-        status="rejected",
-        accepted_at=time.time(),  # reuse field for rejection time
-        accepted_by=rejected_by,
-        acceptance_reason=reason,
+    db.x(
+        """UPDATE prompt_drifts SET status='rejected', rejected_by=?, rejected_at=?, rejection_reason=?
+           WHERE id=?""",
+        (rejected_by, time.time(), reason, drift_id),
     )
 
     return True
 
 
-def get_prompt_diff(version1_hash: str, version2_hash: str) -> dict | None:
-    """Get the diff between two prompt versions."""
-    v1 = db.q("SELECT prompt_code FROM prompt_versions WHERE version_hash=?", (version1_hash,), one=True)
-    v2 = db.q("SELECT prompt_code FROM prompt_versions WHERE version_hash=?", (version2_hash,), one=True)
+def get_prompt_diff(version_id_1: int, version_id_2: int) -> dict | None:
+    """Get the diff between two prompt versions by id."""
+    v1 = db.q("SELECT version_hash, prompt_code FROM prompt_versions WHERE id=?", (version_id_1,), one=True)
+    v2 = db.q("SELECT version_hash, prompt_code FROM prompt_versions WHERE id=?", (version_id_2,), one=True)
 
-    if not v1 or not v2:
+    if not v1 or not v2 or not v1.get("prompt_code") or not v2.get("prompt_code"):
         return None
 
     # Simple diff: show lines that changed
     import difflib
-    diff = list(difflib.unified_diff(
+    diff_lines = list(difflib.unified_diff(
         v1["prompt_code"].splitlines(keepends=True),
         v2["prompt_code"].splitlines(keepends=True),
-        fromfile=f"prompt-{version1_hash[:8]}",
-        tofile=f"prompt-{version2_hash[:8]}",
+        fromfile=f"prompt-{v1['version_hash'][:8]}",
+        tofile=f"prompt-{v2['version_hash'][:8]}",
         lineterm="",
     ))
 
     return {
-        "from_version": version1_hash,
-        "to_version": version2_hash,
-        "diff_lines": diff[:100],  # First 100 lines
-        "total_lines": len(diff),
+        "from_version_id": version_id_1,
+        "to_version_id": version_id_2,
+        "from_hash": v1["version_hash"],
+        "to_hash": v2["version_hash"],
+        "diff_lines": diff_lines[:100],  # First 100 lines
+        "total_lines": len(diff_lines),
     }
 
 
