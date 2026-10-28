@@ -135,7 +135,15 @@ CREATE TABLE IF NOT EXISTS traces (           -- every engine decision, frozen a
     raw_output_json TEXT,      -- the model's tool call exactly as returned
     output_json TEXT,          -- the decision after cleaning (slots mapped, IDs joined)
     latency_ms REAL, input_tokens INTEGER, output_tokens INTEGER, error TEXT,
-    tier_tokens_json TEXT      -- {"system": N, "context": N, "history": N, "output": N} for accounting
+    tier_tokens_json TEXT,     -- {"system": N, "context": N, "history": N, "output": N} for accounting
+    wiped_chips_json TEXT      -- Phase 4: {"tickets": [ids], "slots": [keys], "messages": [indices]} of wiped context
+);
+CREATE TABLE IF NOT EXISTS context_wipes (    -- Phase 4: audit trail of context chips removed from traces
+    id INTEGER PRIMARY KEY, trace_id INTEGER, ts REAL, wiped_by TEXT,
+    chip_type TEXT,            -- ticket | slot | message (what was wiped)
+    chip_id TEXT,              -- ticket_no | slot_key | message_index
+    chip_value TEXT,           -- the actual value that was wiped (for audit)
+    reason TEXT                -- why it was wiped (compliance, redaction, etc.)
 );
 CREATE TABLE IF NOT EXISTS corrections (      -- a person changed something the agent produced (app/telemetry.py)
     id INTEGER PRIMARY KEY, ts REAL, source TEXT, ref_id INTEGER, call_id INTEGER,
@@ -146,6 +154,7 @@ CREATE TABLE IF NOT EXISTS misheard_blocked (  -- misheard-word pairs kept out o
     heard TEXT, said TEXT, by TEXT, at REAL, PRIMARY KEY (heard, said)
 );
 CREATE INDEX IF NOT EXISTS idx_traces_call ON traces(call_id);
+CREATE INDEX IF NOT EXISTS idx_context_wipes_trace ON context_wipes(trace_id);
 CREATE INDEX IF NOT EXISTS idx_corrections_ref ON corrections(source, ref_id);
 CREATE INDEX IF NOT EXISTS idx_auth_events_email ON auth_events(email, event, ts);
 CREATE INDEX IF NOT EXISTS idx_deliveries_due ON webhook_deliveries(status, next_attempt_at);

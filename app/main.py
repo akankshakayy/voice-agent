@@ -794,6 +794,69 @@ def tool_registry():
     return approval_gates.TOOL_REGISTRY
 
 
+# ------------------------------------------------------------------ context chips (Phase 4)
+@app.get("/api/traces/{trace_id}/chips", dependencies=[Depends(allow(*STAFF))])
+def trace_chips(trace_id: int):
+    """Phase 4: Get context chips from a trace (CSP, tickets, slots, messages)."""
+    from . import context_wipe, telemetry
+
+    trace = db.q("SELECT * FROM traces WHERE id=?", (trace_id,), one=True)
+    if not trace:
+        raise HTTPException(404, "trace not found")
+
+    # Deserialize
+    for k in ("messages_json", "context_json", "output_json"):
+        trace[k[:-5]] = json.loads(trace.pop(k)) if trace.get(k) else None
+
+    chips = context_wipe.parse_chips(trace)
+    wiped = context_wipe.get_wiped_chips(trace_id)
+
+    return {"chips": chips, "wiped": wiped}
+
+
+class WipeChipRequest(BaseModel):
+    chip_type: str  # ticket | slot | message
+    chip_id: str    # ticket_no | slot_key | message_index
+    reason: str | None = None
+
+
+@app.post("/api/traces/{trace_id}/wipe", dependencies=[Depends(allow(*STAFF))])
+def wipe_chip(trace_id: int, body: WipeChipRequest, request: Request):
+    """Phase 4: Wipe a context chip from a trace."""
+    from . import context_wipe
+
+    user_email = request.state.user.get("email", "system") if request.state.user else "system"
+
+    success = context_wipe.wipe_chip(
+        trace_id, body.chip_type, body.chip_id, user_email, body.reason
+    )
+    if not success:
+        raise HTTPException(400, "could not wipe chip (trace not found?)")
+
+    return {"status": "wiped", "trace_id": trace_id, "chip": body.chip_id}
+
+
+@app.get("/api/calls/{call_id}/wipes", dependencies=[Depends(allow(*STAFF))])
+def call_wipes(call_id: int):
+    """Phase 4: Get wipe audit trail for all traces in a call."""
+    from . import context_wipe
+    return context_wipe.get_wipe_audit(call_id=call_id)
+
+
+@app.get("/api/traces/{trace_id}/wipes", dependencies=[Depends(allow(*STAFF))])
+def trace_wipes(trace_id: int):
+    """Phase 4: Get wipe audit trail for a specific trace."""
+    from . import context_wipe
+    return context_wipe.get_wipe_audit(trace_id=trace_id)
+
+
+@app.get("/api/wipes/stats", dependencies=[Depends(allow(*STAFF))])
+def wipes_stats(hours: int = 24):
+    """Phase 4: Aggregate wipe statistics."""
+    from . import context_wipe
+    return context_wipe.wipe_stats(hours)
+
+
 # ------------------------------------------------------------------ voice
 class Speak(BaseModel):
     text: str

@@ -59,6 +59,19 @@
   .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; animation: pulse .8s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 
+  /* Phase 4: Context chips */
+  .chips-section { margin-bottom: 16px; }
+  .chip-group { margin-bottom: 12px; }
+  .chip-group-title { font-weight: 600; font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .chips-container { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 12px; background: var(--c1); color: #fff; font-size: 11px; position: relative; transition: all .15s; }
+  .chip:hover { gap: 6px; }
+  .chip.wiped { background: #9ca3af; opacity: .6; text-decoration: line-through; }
+  .chip.wiped::before { content: "🔐"; margin-right: 2px; }
+  .chip-wipe-btn { background: rgba(255,255,255,0.3); border: none; color: #fff; cursor: pointer; padding: 0 4px; border-radius: 50%; font-size: 9px; line-height: 1; transition: background .1s; }
+  .chip-wipe-btn:hover { background: rgba(255,255,255,0.6); }
+  .chip-value { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+
   @media (max-width: 900px) { .harness-body { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -113,6 +126,36 @@
     <div style="margin-top:20px; display:flex; gap:12px; justify-content:flex-end;">
       <button id="approvalDeny" class="secondary" style="padding:10px 20px;">Deny</button>
       <button id="approvalApprove" class="primary" style="padding:10px 20px; background:#10b981; border-color:#10b981; color:white;">Approve</button>
+    </div>
+  </div>
+</div>
+
+<!-- Wipe Chip Modal (Phase 4) -->
+<div id="wipeModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:1000; display:flex; align-items:center; justify-content:center;">
+  <div style="background:var(--surface); border-radius:8px; max-width:500px; width:90%; max-height:80vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3); padding:20px;">
+    <div style="font-size:18px; font-weight:600; margin-bottom:16px;">Wipe Context Chip 🔐</div>
+    <div style="margin:16px 0; padding:12px; background:#ef4444; border-radius:4px; color:white; font-size:11px;">⚠️ This action cannot be undone. The chip will be marked as redacted.</div>
+
+    <div style="margin:16px 0;">
+      <div style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--muted); margin-bottom:6px;">Chip Type</div>
+      <div id="wipeChipType" style="padding:8px; background:var(--surface-alt); border-radius:4px; font-family:monospace; font-size:11px;"></div>
+    </div>
+
+    <div style="margin:16px 0;">
+      <div style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--muted); margin-bottom:6px;">Current Value</div>
+      <div id="wipeChipValue" style="padding:8px; background:var(--surface-alt); border-radius:4px; font-family:monospace; font-size:11px; max-height:100px; overflow-y:auto;"></div>
+    </div>
+
+    <div style="margin:16px 0;">
+      <label style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--muted); display:block; margin-bottom:6px;">
+        Reason (required)
+      </label>
+      <input id="wipeReason" type="text" placeholder="e.g., PII redaction, duplicate data, error correction" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px; background:var(--surface-alt); color:var(--text); font-size:11px;">
+    </div>
+
+    <div style="margin-top:20px; display:flex; gap:12px; justify-content:flex-end;">
+      <button id="wipeCancel" class="secondary" style="padding:10px 20px;">Cancel</button>
+      <button id="wipeConfirm" class="primary" style="padding:10px 20px; background:#ef4444; border-color:#ef4444; color:white;" disabled>Wipe Chip</button>
     </div>
   </div>
 </div>
@@ -406,7 +449,13 @@ function renderEvaluator(trace) {
     `;
   }
 
+  // Phase 4: Context chips
+  html += `<div class="eval-section chips-section"><div class="eval-label">🔐 Context Chips (Phase 4)</div><div id="chipsContainer"></div></div>`;
+
   $('evaluatorPane').innerHTML = html;
+
+  // Load chips after HTML is rendered
+  loadChips(trace.id, trace.wiped_chips || {});
 }
 
 store.subscribe(() => {
@@ -464,6 +513,162 @@ async function loadToolRegistry() {
 }
 
 loadToolRegistry();
+
+// ===== Phase 4: Context Chips =====
+let currentWipeChip = null;
+
+async function loadChips(traceId, wipedChips) {
+  try {
+    const resp = await fetch(`/api/traces/${traceId}/chips`);
+    if (!resp.ok) {
+      console.warn('Could not load chips:', resp.status);
+      $('chipsContainer').innerHTML = '<div style="color:var(--muted); font-size:11px;">Could not load chips</div>';
+      return;
+    }
+
+    const data = await resp.json();
+    renderChips(data.chips || {}, data.wiped || wipedChips || {}, traceId);
+  } catch (e) {
+    console.warn('Error loading chips:', e);
+    $('chipsContainer').innerHTML = '<div style="color:var(--muted); font-size:11px;">Error loading chips</div>';
+  }
+}
+
+function renderChips(chips, wiped, traceId) {
+  let html = '';
+
+  // CSP Data chips
+  if (chips.csp) {
+    const cspChips = Object.entries(chips.csp || {}).filter(([k, v]) => v);
+    if (cspChips.length > 0) {
+      html += '<div class="chip-group">';
+      html += '<div class="chip-group-title">CSP Data</div>';
+      html += '<div class="chips-container">';
+      cspChips.forEach(([key, value]) => {
+        const chipType = 'csp_' + key;
+        const isWiped = wiped.csp && wiped.csp.includes(chipType);
+        html += `<div class="chip ${isWiped ? 'wiped' : ''}" title="${key}: ${esc(String(value))}">
+          <span class="chip-value">${esc(String(value).slice(0, 30))}</span>
+          ${!isWiped ? `<button class="chip-wipe-btn" onclick="showWipeModal('${traceId}', 'csp_data', '${key}', '${esc(String(value))}')">✕</button>` : ''}
+        </div>`;
+      });
+      html += '</div></div>';
+    }
+  }
+
+  // Ticket chips
+  if (chips.tickets && chips.tickets.length > 0) {
+    html += '<div class="chip-group">';
+    html += `<div class="chip-group-title">Past Tickets (${chips.tickets.length})</div>`;
+    html += '<div class="chips-container">';
+    chips.tickets.forEach((ticket, idx) => {
+      const isWiped = wiped.ticket && wiped.ticket.includes(ticket.id);
+      html += `<div class="chip ${isWiped ? 'wiped' : ''}" title="${ticket.id}: ${esc(ticket.summary)}">
+        <span class="chip-value">${esc(ticket.id)}</span>
+        ${!isWiped ? `<button class="chip-wipe-btn" onclick="showWipeModal('${traceId}', 'ticket', '${ticket.id}', '${esc(ticket.summary)}')">✕</button>` : ''}
+      </div>`;
+    });
+    html += '</div></div>';
+  }
+
+  // Slot chips
+  if (chips.slots && chips.slots.length > 0) {
+    html += '<div class="chip-group">';
+    html += `<div class="chip-group-title">Extracted Slots (${chips.slots.length})</div>`;
+    html += '<div class="chips-container">';
+    chips.slots.forEach(slot => {
+      const isWiped = wiped.slot && wiped.slot.includes(slot.key);
+      html += `<div class="chip ${isWiped ? 'wiped' : ''}" title="${slot.key}: ${esc(slot.value)}">
+        <span class="chip-value">${esc(slot.key)}</span>
+        ${!isWiped ? `<button class="chip-wipe-btn" onclick="showWipeModal('${traceId}', 'slot', '${slot.key}', '${esc(slot.value)}')">✕</button>` : ''}
+      </div>`;
+    });
+    html += '</div></div>';
+  }
+
+  // Message chips
+  if (chips.messages && chips.messages.length > 0) {
+    html += '<div class="chip-group">';
+    html += `<div class="chip-group-title">Messages (${chips.messages.length})</div>`;
+    html += '<div class="chips-container">';
+    chips.messages.slice(0, 5).forEach(msg => {
+      const isWiped = wiped.message && wiped.message.includes(String(msg.idx));
+      html += `<div class="chip ${isWiped ? 'wiped' : ''}" title="${msg.role}: ${esc(msg.text)}">
+        <span class="chip-value">T${msg.idx} ${msg.role}</span>
+        ${!isWiped ? `<button class="chip-wipe-btn" onclick="showWipeModal('${traceId}', 'message', '${msg.idx}', '${esc(msg.text)}')">✕</button>` : ''}
+      </div>`;
+    });
+    if (chips.messages.length > 5) {
+      html += `<div style="padding:4px 8px; color:var(--muted); font-size:10px;">+${chips.messages.length - 5} more</div>`;
+    }
+    html += '</div></div>';
+  }
+
+  if (!html) {
+    html = '<div style="color:var(--muted); font-size:11px;">No context chips found</div>';
+  }
+
+  $('chipsContainer').innerHTML = html;
+}
+
+function showWipeModal(traceId, chipType, chipId, chipValue) {
+  currentWipeChip = { traceId, chipType, chipId };
+
+  const modal = document.getElementById('wipeModal');
+  $('wipeChipType').textContent = `${chipType} / ${chipId}`;
+  $('wipeChipValue').textContent = esc(chipValue);
+  $('wipeReason').value = '';
+  $('wipeConfirm').disabled = true;
+
+  // Enable confirm button when reason is entered
+  $('wipeReason').oninput = () => {
+    $('wipeConfirm').disabled = !$('wipeReason').value.trim();
+  };
+
+  modal.style.display = 'flex';
+}
+
+$('wipeCancel').addEventListener('click', () => {
+  document.getElementById('wipeModal').style.display = 'none';
+  currentWipeChip = null;
+});
+
+$('wipeConfirm').addEventListener('click', async () => {
+  if (!currentWipeChip) return;
+
+  const modal = document.getElementById('wipeModal');
+  $('wipeConfirm').disabled = true;
+  $('wipeConfirm').textContent = 'Wiping...';
+
+  try {
+    const resp = await fetch(`/api/traces/${currentWipeChip.traceId}/wipe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chip_type: currentWipeChip.chipType,
+        chip_id: currentWipeChip.chipId,
+        reason: $('wipeReason').value,
+      }),
+    });
+
+    if (resp.ok) {
+      modal.style.display = 'none';
+      // Reload current trace
+      const currentTrace = allTraces[store.getState().selectedIdx];
+      if (currentTrace && currentTrace.id === currentWipeChip.traceId) {
+        renderEvaluator(currentTrace);
+      }
+    } else {
+      alert('Failed to wipe chip: ' + resp.statusText);
+      $('wipeConfirm').disabled = false;
+      $('wipeConfirm').textContent = 'Wipe Chip';
+    }
+  } catch (e) {
+    alert('Error wiping chip: ' + e.message);
+    $('wipeConfirm').disabled = false;
+    $('wipeConfirm').textContent = 'Wipe Chip';
+  }
+});
 </script>
 </body>
 </html>

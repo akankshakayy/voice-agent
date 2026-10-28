@@ -124,8 +124,15 @@ def flush(timeout: float = 5.0):
 def traces_for_call(call_id: int) -> list[dict]:
     rows = db.q("SELECT * FROM traces WHERE call_id=? ORDER BY id", (call_id,))
     for r in rows:
-        for k in ("messages_json", "context_json", "raw_output_json", "output_json"):
+        for k in ("messages_json", "context_json", "raw_output_json", "output_json", "tier_tokens_json"):
             r[k[:-5]] = json.loads(r.pop(k)) if r.get(k) else None
+        # Phase 4: Include wipe info
+        r["wiped_chips"] = {}
+        if r.get("wiped_chips_json"):
+            try:
+                r["wiped_chips"] = json.loads(r.pop("wiped_chips_json"))
+            except (json.JSONDecodeError, TypeError):
+                r.pop("wiped_chips_json", None)
     return rows
 
 
