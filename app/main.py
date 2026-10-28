@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import agent, auth, db, google_auth, integrations, mailer, metrics, misheard, recordings, report, stt, telemetry, tts  # noqa: E402
+from . import agent, auth, bootstrap, db, google_auth, integrations, mailer, metrics, misheard, recordings, report, stt, telemetry, tts  # noqa: E402
 from .seed import seed_if_demo  # noqa: E402
 from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, MAX_MISUNDERSTOOD  # noqa
 
@@ -42,6 +42,12 @@ def _reap_stale_calls(stop: threading.Event):
 
 @asynccontextmanager
 async def lifespan(_app):
+    # Auto-migrate database from /tmp if needed
+    try:
+        bootstrap.migrate_db_if_needed()
+    except Exception as e:
+        log.error("Bootstrap failed: %s", e)
+
     stop = threading.Event()
     threading.Thread(target=_reap_stale_calls, args=(stop,), daemon=True, name="call-reaper").start()
     threading.Thread(target=recordings.processing_loop, args=(stop,), daemon=True, name="recordings").start()
