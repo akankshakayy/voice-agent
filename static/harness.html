@@ -75,6 +75,16 @@
   .chip-value { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
 
   @media (max-width: 900px) { .harness-body { grid-template-columns: 1fr; } }
+
+  /* Modals: MUST be hidden by default */
+  #approvalModal, #wipeModal {
+    display: none !important;
+  }
+  #approvalModal[data-open="true"], #wipeModal[data-open="true"] {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+  }
 </style>
 </head>
 <body>
@@ -463,8 +473,10 @@ store.subscribe(() => {
 
 // ===== Phase 3: Approval Gates =====
 let currentApprovalId = null;
+let approvalModalOpen = false; // Guard against auto-triggering
 
 async function showApprovalModal(callId, traceId, action, decision) {
+  if (approvalModalOpen) return; // Prevent double-trigger
   const modal = document.getElementById('approvalModal');
 
   $('approvalContent').innerHTML = `
@@ -477,9 +489,8 @@ async function showApprovalModal(callId, traceId, action, decision) {
     </div>
   `;
 
-  modal.style.display = 'flex';
-  modal.style.alignItems = 'center';
-  modal.style.justifyContent = 'center';
+  approvalModalOpen = true;
+  modal.setAttribute('data-open', 'true');
   $('approvalApprove').disabled = false;
   $('approvalDeny').disabled = false;
   $('approvalApprove').textContent = 'Approve';
@@ -537,11 +548,13 @@ async function showApprovalModal(callId, traceId, action, decision) {
         body: { approved_by: 'harness-ops' },
       });
       alert('✓ Action approved!');
-      modal.style.display = 'none';
+      modal.removeAttribute('data-open');
+      approvalModalOpen = false;
     } catch (e) {
       alert('Failed to approve: ' + e.message);
       $('approvalApprove').disabled = false;
       $('approvalApprove').textContent = 'Approve';
+      approvalModalOpen = false;
     }
   };
 
@@ -555,11 +568,13 @@ async function showApprovalModal(callId, traceId, action, decision) {
         body: { denied_by: 'harness-ops', denial_reason: 'Rejected in harness review' },
       });
       alert('✓ Action denied!');
-      modal.style.display = 'none';
+      modal.removeAttribute('data-open');
+      approvalModalOpen = false;
     } catch (e) {
       alert('Error: ' + e.message);
       $('approvalDeny').disabled = false;
       $('approvalDeny').textContent = 'Deny';
+      approvalModalOpen = false;
     }
   };
 }
@@ -680,13 +695,11 @@ function showWipeModal(traceId, chipType, chipId, chipValue) {
     $('wipeConfirm').disabled = !$('wipeReason').value.trim();
   };
 
-  modal.style.display = 'flex';
-  modal.style.alignItems = 'center';
-  modal.style.justifyContent = 'center';
+  modal.setAttribute('data-open', 'true');
 }
 
 $('wipeCancel').addEventListener('click', () => {
-  document.getElementById('wipeModal').style.display = 'none';
+  document.getElementById('wipeModal').removeAttribute('data-open');
   currentWipeChip = null;
 });
 
@@ -706,7 +719,7 @@ $('wipeConfirm').addEventListener('click', async () => {
         reason: $('wipeReason').value,
       },
     });
-    modal.style.display = 'none';
+    modal.removeAttribute('data-open');
     // Reload current trace
     const currentTrace = allTraces[store.getState().selectedIdx];
     if (currentTrace && currentTrace.id === currentWipeChip.traceId) {
