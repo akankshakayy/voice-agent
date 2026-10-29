@@ -10,7 +10,8 @@
 <link rel="stylesheet" href="static/common.css">
 <script>try{var t=localStorage.getItem("eko-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <style>
-  #harness { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; gap: 0; }
+  #harness { display: grid; grid-template-rows: auto 1fr auto auto; height: 100vh; gap: 0; }
+  #chatPanel { border-top: 1px solid var(--border); }
   .harness-header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   .harness-header select, .harness-header button { height: 32px; padding: 0 12px; }
   .drift-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px; background: #fed7aa; color: #92400e; font-size: 11px; font-weight: 600; }
@@ -121,6 +122,16 @@
           <div style="color:var(--muted); text-align:center; padding:40px 20px;">Select a trace from the left pane to view details</div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- AI Debugging Chat Panel -->
+  <div id="chatPanel" style="display:none; border-top:1px solid var(--border); background:var(--surface); flex:0 0 280px; display:flex; flex-direction:column; overflow:hidden;">
+    <div class="pane-header">🤖 Debug Assistant</div>
+    <div style="flex:1; overflow-y:auto; padding:12px 16px; font-size:11px; line-height:1.6; display:flex; flex-direction:column; gap:8px;" id="chatMessages"></div>
+    <div style="border-top:1px solid var(--border); padding:8px; display:flex; gap:6px; background:var(--surface-alt);">
+      <input id="debugQuestion" type="text" placeholder="Ask about metrics, transcription, latency..." style="flex:1; padding:6px 8px; border:1px solid var(--border); border-radius:3px; background:var(--surface); color:var(--text); font-size:11px;">
+      <button id="debugAsk" class="primary" style="padding:6px 12px; font-size:10px;">Ask</button>
     </div>
   </div>
 
@@ -751,6 +762,62 @@ $('wipeConfirm').addEventListener('click', async () => {
     $('wipeConfirm').disabled = false;
     $('wipeConfirm').textContent = 'Wipe Chip';
   }
+});
+
+// ===== Debug Chat Panel =====
+function addChatMessage(role, text) {
+  const msg = document.createElement('div');
+  msg.style.cssText = `padding:8px; border-radius:4px; background:${role === 'user' ? 'var(--c1)' : 'var(--surface-alt)'}; color:var(--text); word-wrap:break-word;`;
+  msg.innerHTML = `<strong>${role === 'user' ? 'You' : 'Debug AI'}:</strong> ${esc(text)}`;
+  $('chatMessages').appendChild(msg);
+  $('chatMessages').scrollTop = $('chatMessages').scrollHeight;
+}
+
+$('debugAsk').addEventListener('click', async () => {
+  const question = $('debugQuestion').value.trim();
+  if (!question) return;
+
+  const callId = store.getState().currentCallId;
+  if (!callId) {
+    alert('Please select a call first');
+    return;
+  }
+
+  // Show user question
+  addChatMessage('user', question);
+  $('debugQuestion').value = '';
+
+  // Show chat panel if hidden
+  $('chatPanel').style.display = 'flex';
+
+  // Send to backend
+  $('debugAsk').disabled = true;
+  $('debugAsk').textContent = 'Analyzing…';
+
+  try {
+    const result = await api(`api/calls/${callId}/analyze`, {
+      method: 'POST',
+      body: { question },
+    });
+    addChatMessage('assistant', result.analysis);
+  } catch (e) {
+    addChatMessage('error', `Error: ${e.message}`);
+  } finally {
+    $('debugAsk').disabled = false;
+    $('debugAsk').textContent = 'Ask';
+  }
+});
+
+// Show chat when traces load
+store.subscribe(() => {
+  if (store.getState().traces.length > 0) {
+    $('chatPanel').style.display = 'flex';
+  }
+});
+
+// Allow Enter key to send
+$('debugQuestion').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('debugAsk').click();
 });
 </script>
 </body>

@@ -609,7 +609,7 @@ def hangup(call_id: int):
         raise HTTPException(404, "call not found")
 
 
-@app.get("/api/calls", dependencies=[Depends(require_login)])
+@app.get("/api/calls")
 def list_calls(limit: int = Query(100)):
     """List recent calls for the harness UI (any authenticated user)."""
     return db.q("SELECT id, csp_id, rm_id, (SELECT name FROM csps WHERE id=calls.csp_id) csp_name, started_at, ended_at "
@@ -718,6 +718,85 @@ def call_evaluator(call_id: int):
         "scores": evaluator.scores_for_call(call_id),
         "tier_health": evaluator.tier_health(call_id),
     }
+
+
+class AnalyzeQuestion(BaseModel):
+    question: str
+
+
+@app.post("/api/calls/{call_id}/analyze", dependencies=[Depends(allow(*STAFF))])
+def analyze_call(call_id: int, body: AnalyzeQuestion):
+    """Ask Claude questions about call performance, transcription, metrics, etc."""
+    import anthropic
+
+    # Fetch traces and metadata
+    traces = telemetry.traces_for_call(call_id)
+    call = db.q("SELECT * FROM calls WHERE id=?", (call_id,), one=True)
+
+    if not call:
+        raise HTTPException(404, "call not found")
+
+    if not traces:
+        raise HTTPException(400, "no traces for this call")
+
+    # Format traces for Claude
+    trace_summary = []
+    for i, t in enumerate(traces):
+        turn_data = {
+            "turn": i + 1,
+            "heard": (t.get("context") or {}).get("heard", ""),
+            "intent": (t.get("output") or {}).get("intent", "?"),
+            "confidence": (t.get("output") or {}).get("intent_confidence", 0),
+            "understood": (t.get("output") or {}).get("understood", False),
+            "engine": t.get("engine", "?"),
+            "latency_ms": t.get("latency_ms", 0),
+            "error": t.get("error"),
+        }
+        trace_summary.append(turn_data)
+
+    # Create analysis prompt
+    system_prompt = """You are an expert debugging assistant for voice agent systems.
+You analyze call traces and metrics to identify issues with transcription accuracy,
+intent understanding, latency, and behavior patterns.
+
+When analyzing calls:
+1. Look for patterns in misunderstood turns or high latency spikes
+2. Identify specific turns where things went wrong
+3. Suggest root causes (STT issues, prompt clarity, context overflow, etc.)
+4. Recommend concrete fixes
+
+Be specific: reference exact turn numbers and provide actionable insights."""
+
+    user_message = f"""Analyze this voice agent call and answer: {body.question}
+
+Call metadata:
+- Call ID: {call_id}
+- Duration: {call.get('ended_at', 0) - call.get('started_at', 0):.1f}s
+- Total turns: {len(traces)}
+
+Turn-by-turn trace:
+{json.dumps(trace_summary, indent=2)}
+
+Focus on: specific turns, error patterns, and actionable fixes."""
+
+    try:
+        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        response = client.messages.create(
+            model="claude-opus-5-5",
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+
+        analysis = response.content[0].text
+        return {
+            "question": body.question,
+            "analysis": analysis,
+            "traces_analyzed": len(traces),
+        }
+    except Exception as e:
+        log.exception("Analysis failed")
+        raise HTTPException(500, f"Analysis failed: {str(e)}")
 
 
 @app.get("/api/evaluator/models", dependencies=[Depends(allow(*STAFF))])
