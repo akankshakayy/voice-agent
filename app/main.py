@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: E402
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
@@ -610,7 +610,7 @@ def hangup(call_id: int):
 
 
 @app.get("/api/calls", dependencies=[Depends(require_login)])
-def list_calls(limit: int = 100):
+def list_calls(limit: int = Query(100)):
     """List recent calls for the harness UI (any authenticated user)."""
     return db.q("SELECT id, csp_id, rm_id, (SELECT name FROM csps WHERE id=calls.csp_id) csp_name, started_at, ended_at "
                 "FROM calls ORDER BY started_at DESC LIMIT ?", (limit,))
