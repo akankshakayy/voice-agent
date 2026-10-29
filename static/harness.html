@@ -191,7 +191,6 @@ const store = createStore({ selectedIdx: -1, traces: [], currentCallId: null });
 
 // ===== State =====
 let allTraces = [];
-const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // ===== Load calls =====
 (async () => {
