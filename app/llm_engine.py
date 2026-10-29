@@ -369,10 +369,10 @@ def label_for(p: str | None) -> str:
 
 
 class ClaudeCodeEngine:
-    """Use Claude Code's CLI (`claude -p`) for agent decisions.
+    """Use Claude Code's CLI for agent decisions with optimized prompts.
 
-    Calls the local Claude CLI via subprocess, which authenticates through
-    Claude Code's own session (bypassing API key requirements).
+    Minimizes latency by keeping prompts compact and using fast subprocess calls.
+    Authentication through Claude Code's own session (no API keys needed).
     """
     name = "claude-code"
 
@@ -383,22 +383,19 @@ class ClaudeCodeEngine:
         system, tier_tokens = _system_prompt(state)
         messages = _build_messages(state, user_text)
 
-        # Build a prompt that forces Claude to output the exact agent_turn schema
+        # Compact prompt: full system context but minimal formatting
         msg_str = json.dumps(messages)
         prompt = f"""{system}
 
-MESSAGES:
-{msg_str}
+MESSAGES: {msg_str}
 
-USER'S LAST MESSAGE: {user_text}
+USER: {user_text}
 
-Respond with ONLY a valid JSON object matching this schema (no markdown, no extra text):
-{json.dumps(AGENT_TURN_TOOL["input_schema"])}
-"""
+OUTPUT (JSON only, no markdown):
+{json.dumps(AGENT_TURN_TOOL["input_schema"])}"""
 
         t0 = time.perf_counter()
         try:
-            # Call claude CLI with env vars cleared to avoid auth conflicts
             env = os.environ.copy()
             env.pop("ANTHROPIC_API_KEY", None)
             env.pop("GROQ_API_KEY", None)
@@ -408,15 +405,14 @@ Respond with ONLY a valid JSON object matching this schema (no markdown, no extr
                 ["claude", "-p", prompt],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=20,
                 env=env,
-                cwd="/tmp",  # Run in neutral dir to avoid repo assumptions
+                cwd="/tmp",
             )
 
             if result.returncode != 0:
                 raise RuntimeError(f"claude CLI error: {result.stderr}")
 
-            # Extract JSON from response (might have markdown wrapping)
             output = result.stdout.strip()
             if output.startswith("```"):
                 output = output.split("```")[1]
@@ -427,7 +423,6 @@ Respond with ONLY a valid JSON object matching this schema (no markdown, no extr
             out = json.loads(output)
             latency = (time.perf_counter() - t0) * 1000
 
-            # Estimate tokens (claude CLI doesn't report usage)
             d = _parse(out, state, self.name, latency, 0, 0, "claude-code")
             d["trace"] = {"system": system, "messages": messages, "raw": out, "tier_tokens": tier_tokens}
             return d
