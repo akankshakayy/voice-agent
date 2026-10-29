@@ -195,12 +195,20 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 
 // ===== Load calls =====
 (async () => {
-  await loadConfig();
+  console.log('[Harness] Starting initialization...');
+  $('status').textContent = 'Initializing…';
 
   try {
+    console.log('[Harness] Loading config...');
+    await loadConfig();
+    console.log('[Harness] Config loaded');
+
+    console.log('[Harness] Fetching calls...');
     const calls = await api('api/calls');
+    console.log('[Harness] Got calls:', calls.length);
 
     if (calls.length === 0) {
+      console.log('[Harness] No calls found');
       $('status').textContent = 'No calls found';
       $('footerStatus').textContent = 'No call data available';
       return;
@@ -212,13 +220,19 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
     }).join('');
 
     $('callSelect').value = calls[0].id;
+    console.log('[Harness] Call select populated');
     $('status').textContent = `${calls.length} call(s) loaded`;
+
+    console.log('[Harness] Loading traces for call ' + calls[0].id);
     await loadTraces(calls[0].id);
+    console.log('[Harness] Traces loaded');
   } catch (err) {
+    console.error('[Harness] Error during init:', err);
     $('status').textContent = `Error: ${err.message}`;
     $('callSelect').innerHTML = '<option>Error loading calls</option>';
   }
 })();
+console.log('[Harness] Init function registered');
 
 $('callSelect').addEventListener('change', (e) => {
   if (e.target.value) loadTraces(parseInt(e.target.value));
