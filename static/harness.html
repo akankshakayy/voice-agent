@@ -200,11 +200,17 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 
   try {
     console.log('[Harness] Loading config...');
-    await loadConfig();
+    const configTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Config timeout')), 5000)
+    );
+    await Promise.race([loadConfig(), configTimeout]);
     console.log('[Harness] Config loaded');
 
     console.log('[Harness] Fetching calls...');
-    const calls = await api('api/calls');
+    const callsTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Calls API timeout')), 10000)
+    );
+    const calls = await Promise.race([api('api/calls'), callsTimeout]);
     console.log('[Harness] Got calls:', calls.length);
 
     if (calls.length === 0) {
@@ -228,8 +234,10 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
     console.log('[Harness] Traces loaded');
   } catch (err) {
     console.error('[Harness] Error during init:', err);
-    $('status').textContent = `Error: ${err.message}`;
-    $('callSelect').innerHTML = '<option>Error loading calls</option>';
+    const errMsg = err?.message || String(err);
+    $('status').textContent = `Error: ${errMsg}`;
+    $('callSelect').innerHTML = `<option disabled>Error: ${errMsg}</option>`;
+    $('footerStatus').textContent = `Initialization failed: ${errMsg}`;
   }
 })();
 console.log('[Harness] Init function registered');
