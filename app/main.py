@@ -88,7 +88,8 @@ PUBLIC_PREFIXES = ("/static/",)
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
 PAGE_ROLES = {"/": ("admin", "ops", "rm"), "/call": STAFF, "/ops": STAFF, "/harness": STAFF, "/rm": ("admin", "ops", "rm"),
-              "/users": ("admin",), "/recordings": ("admin", "ops", "rm"), "/account": ("admin", "ops", "rm", "pending")}
+              "/users": ("admin",), "/recordings": ("admin", "ops", "rm"), "/account": ("admin", "ops", "rm", "pending"),
+              "/metrics-trends": STAFF}
 # All a not-yet-approved account can reach: its own account settings
 PENDING_OK = {"/pending", "/account", "/api/auth/me", "/api/auth/logout", "/api/auth/logout-all", "/api/auth/password",
               "/api/auth/email", "/api/auth/verify/resend", "/api/auth/activity"}
@@ -499,6 +500,11 @@ def rm_page():
 @app.get("/ops")
 def ops_page():
     return FileResponse(os.path.join(STATIC, "ops.html"))
+
+
+@app.get("/metrics-trends", dependencies=[Depends(allow(*STAFF))])
+def metrics_trends_page():
+    return FileResponse(os.path.join(STATIC, "metrics-trends.html"))
 
 
 @app.get("/recordings")
