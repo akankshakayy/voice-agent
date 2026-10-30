@@ -140,6 +140,13 @@
     </div>
     <div class="metrics-grid" id="audioMetrics"></div>
 
+    <!-- TRANSCRIPTION ACCURACY SECTION -->
+    <div class="section-header">
+      <h2>📝 Transcription Accuracy</h2>
+      <span class="tag" style="background: linear-gradient(135deg, #ec4899, #f43f5e);">Accuracy</span>
+    </div>
+    <div class="metrics-grid" id="transcriptionMetrics"></div>
+
     <!-- INTENT UNDERSTANDING SECTION -->
     <div class="section-header">
       <h2>🧠 Intent Understanding</h2>
@@ -257,10 +264,16 @@ function renderDashboard() {
 
   // Audio Metrics
   const audioMetrics = [
-    { id: "sttconf", label: "STT Confidence", value: model.stt.avg_confidence != null ? (model.stt.avg_confidence * 100).toFixed(1) + "%" : "–", sub: `${model.stt.low_conf_pct}% below threshold`, delta: null, type: "audio" },
+    { id: "sttconf", label: "STT Confidence", value: model.stt.avg_confidence != null ? (model.stt.avg_confidence * 100).toFixed(1) + "%" : "–", sub: `${model.stt.low_conf_pct}% below threshold`, delta: deltas.model.stt_confidence || null, type: "audio" },
     { id: "audiosamples", label: "Audio Samples", value: model.stt.samples || "0", sub: "turns analyzed", delta: null, type: "audio" },
   ];
   $("audioMetrics").innerHTML = audioMetrics.map(m => renderMetricCard(m)).join("");
+
+  // Transcription Accuracy Metrics
+  const transcriptionMetrics = [
+    { id: "transcriptacc", label: "Transcription Accuracy", value: model.stt.accuracy_pct != null ? model.stt.accuracy_pct + "%" : "–", sub: `${model.stt.low_conf_count || 0} low-confidence turns`, delta: null, type: "transcription" },
+  ];
+  $("transcriptionMetrics").innerHTML = transcriptionMetrics.map(m => renderMetricCard(m)).join("");
 
   // Intent Metrics
   const intentMetrics = [
@@ -406,7 +419,7 @@ function renderRootCauseAnalysis(deltas) {
 function showMetricDetail(id, label, absDelta, pctDelta) {
   if (!currentData) return;
 
-  const { current, deltas } = currentData;
+  const { current, deltas, summary } = currentData;
   const { agent, model, feedback } = current;
 
   let html = `
@@ -420,9 +433,17 @@ function showMetricDetail(id, label, absDelta, pctDelta) {
   `;
 
   if (absDelta !== null) {
+    const lowerIsBetter = label.includes("Rate") || label.includes("Correction") || label.includes("Latency");
+    const isGood = lowerIsBetter ? absDelta < 0 : absDelta > 0;
+    const status = isGood ? "✅ Improved" : "⚠️ Degraded";
+
     html += `
       <div class="modal-section">
         <h3>Change from Previous Period</h3>
+        <div class="detail-row">
+          <span class="detail-label">Status</span>
+          <span class="detail-value" style="font-weight: 600; color: ${isGood ? '#10b981' : '#ef4444'}">${status}</span>
+        </div>
         <div class="detail-row">
           <span class="detail-label">Absolute Change</span>
           <span class="detail-value">${absDelta > 0 ? '+' : ''}${absDelta.toFixed(2)}</span>
@@ -437,12 +458,29 @@ function showMetricDetail(id, label, absDelta, pctDelta) {
 
   html += `
     <div class="modal-section">
-      <h3>Interpretation</h3>
+      <h3>What This Means</h3>
       <div style="font-size:13px; line-height:1.6;">
         ${getMetricInterpretation(id, current, deltas)}
       </div>
     </div>
   `;
+
+  const contributors = getContributingMetrics(id, deltas, summary);
+  if (contributors && contributors.length > 0) {
+    html += `
+      <div class="modal-section">
+        <h3>Contributing Factors</h3>
+        <div style="font-size:12px;">
+          ${contributors.map(c => `
+            <div class="breakdown-row" style="padding: 8px 0;">
+              <span>${c.status} <strong>${c.name}</strong></span>
+              <span style="text-align: right; color: var(--muted);">${c.delta}</span>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }
 
   html += `
     <div class="modal-section">
@@ -503,6 +541,7 @@ function getMetricValue(id, current) {
     escalation: agent.totals.escalation_rate + "%",
     notunderstood: agent.totals.not_understood_rate + "%",
     sttconf: (model.stt.avg_confidence * 100).toFixed(1) + "%",
+    transcriptacc: (model.stt.accuracy_pct || 0) + "%",
     audiosamples: model.stt.samples,
     intentacc: model.intent.accuracy_pct + "%",
     intentconf: (model.intent.avg_confidence * 100).toFixed(1) + "%",
@@ -517,30 +556,116 @@ function getMetricValue(id, current) {
 }
 
 function getMetricInterpretation(id, current, deltas) {
+  const { agent, model, feedback } = current;
   const interpretations = {
-    escalation: `Escalation rate shows what percentage of completed calls are escalated to RMs. A decrease is positive (agent handling more autonomously). A increase suggests the agent needs improvement.`,
-    notunderstood: `This metric tracks calls where the agent doesn't understand the user. Lower is better. Decreases indicate better intent recognition or speech clarity.`,
-    sttconf: `Speech-to-text confidence measures how well the audio is being transcribed. Higher confidence (closer to 100%) means clearer audio and better transcription quality.`,
-    intentacc: `Intent accuracy is how often the agent correctly identifies what the user wants. This is ground truth from RM confirmation. Higher is always better.`,
-    costcall: `Average cost per call based on LLM usage. This helps track operational efficiency. Lower cost with same quality is an improvement.`,
-    acceptance: `Percentage of tickets where RMs accepted the agent's output without changes. Higher acceptance means better agent quality.`,
-    correction: `Average percentage of text that RMs had to change in tickets. Lower is better - means the agent is producing higher quality output.`,
-    latp50: `50th percentile latency (median response time). This is typical response speed. Lower is faster, better user experience.`,
+    calls: `Total number of calls handled in this period. Includes both inbound and outbound interactions. Track this to understand volume trends and system load.`,
+    duration: `Average call duration indicates how long the agent takes to resolve issues. Shorter durations suggest more efficient handling, but monitor for quality impact.`,
+    selfresolved: `Count of calls fully resolved by the agent without RM escalation. Higher is better - shows agent autonomy and capability.`,
+    ticketrate: `Percentage of calls that require ticket creation for follow-up. Lower is generally better, indicating more immediate resolution by the agent.`,
+    escalation: `Percentage of calls escalated to RMs for handling. Lower is better - shows the agent is handling more autonomously. High rates suggest issues with intent understanding or confidence.`,
+    notunderstood: `Percentage of calls where the agent cannot understand the user's request. Lower is better. Driven by transcription quality, intent model accuracy, and utterance clarity.`,
+    sttconf: `Average speech-to-text confidence score (0-1). Higher is better. Low confidence indicates audio quality issues, background noise, or accent/dialect challenges. Currently: ${(model.stt.avg_confidence * 100).toFixed(1)}%`,
+    transcriptacc: `Percentage of turns with high-confidence transcription. Based on STT confidence threshold. Shows overall transcription quality. Currently: ${model.stt.accuracy_pct || '–'}%`,
+    audiosamples: `Number of user turns analyzed for transcription quality in this period. More samples = more data.`,
+    intentacc: `Accuracy of intent classification based on RM-labeled ground truth. Higher is better. Shows how well the model understands user requests. Currently: ${model.intent.accuracy_pct || '–'}%`,
+    intentconf: `Average confidence of intent predictions. Higher is better. Low confidence predictions often lead to escalations or wrong decisions.`,
+    latp50: `Median response latency - typical time for agent to generate a response. Lower is better for user experience. Currently: ${model.latency_ms.p50}ms`,
+    latp95: `95th percentile latency - worst-case response time. This affects user experience for slower interactions. Currently: ${model.latency_ms.p95}ms`,
+    costcall: `Average cost in INR per call based on LLM API usage. Lower is better for cost efficiency. Track alongside quality to avoid false economies.`,
+    acceptance: `Percentage of tickets where RMs accepted agent output without changes. Higher is better - reflects agent quality. Currently: ${feedback.acceptance_pct || '–'}%`,
+    correction: `Average percentage of text RMs had to modify. Lower is better - means agent output needs less correction. Currently: ${feedback.correction_delta_pct || '–'}%`,
+    slots: `Percentage of required form fields that the agent successfully filled. Higher is better. Shows completeness of information gathering.`,
   };
-  return interpretations[id] || "Click on a metric card to see detailed analysis.";
+  return interpretations[id] || "This metric tracks system performance across your voice agent operations.";
+}
+
+function getContributingMetrics(id, deltas, summary) {
+  const allDeltas = {
+    calls: deltas.agent.calls,
+    duration: deltas.agent.avg_duration_sec,
+    escalation: deltas.agent.escalation_rate,
+    notunderstood: deltas.agent.not_understood_rate,
+    ticketrate: deltas.agent.ticket_raise_rate,
+    sttconf: deltas.model.stt_confidence,
+    transcriptacc: deltas.model.stt_confidence,
+    intentacc: deltas.model.intent_accuracy,
+    intentconf: deltas.model.intent_confidence || (deltas.model.intent_accuracy ? [1, 1] : null),
+    acceptance: deltas.feedback.acceptance_rate,
+    correction: deltas.feedback.correction_delta,
+  };
+
+  const contributors = [];
+  const deltaVal = allDeltas[id];
+  if (!deltaVal || !deltaVal[0]) return [];
+
+  // Show which metrics correlate with this one
+  const correlations = {
+    escalation: [
+      { key: 'notunderstood', name: 'Not Understood Rate' },
+      { key: 'intentacc', name: 'Intent Accuracy' },
+      { key: 'sttconf', name: 'STT Confidence' }
+    ],
+    notunderstood: [
+      { key: 'sttconf', name: 'STT Confidence' },
+      { key: 'intentacc', name: 'Intent Accuracy' },
+      { key: 'escalation', name: 'Escalation Rate' }
+    ],
+    ticketrate: [
+      { key: 'escalation', name: 'Escalation Rate' },
+      { key: 'acceptance', name: 'Acceptance Rate' }
+    ],
+    sttconf: [
+      { key: 'notunderstood', name: 'Not Understood Rate' },
+      { key: 'intentacc', name: 'Intent Accuracy' }
+    ],
+    intentacc: [
+      { key: 'escalation', name: 'Escalation Rate' },
+      { key: 'notunderstood', name: 'Not Understood Rate' }
+    ],
+    acceptance: [
+      { key: 'correction', name: 'Correction Delta' },
+      { key: 'escalation', name: 'Escalation Rate' }
+    ]
+  };
+
+  const corr = correlations[id] || [];
+  for (const c of corr) {
+    const d = allDeltas[c.key];
+    if (d && d[0] !== null) {
+      const lowerIsBetter = c.key.includes('correction') || c.key.includes('escalation') || c.key.includes('understood') || c.key.includes('lat');
+      const isGood = lowerIsBetter ? d[0] < 0 : d[0] > 0;
+      contributors.push({
+        status: isGood ? '✅' : '⚠️',
+        name: c.name,
+        delta: `${d[0] > 0 ? '+' : ''}${d[0].toFixed(1)} (${d[1]}%)`
+      });
+    }
+  }
+
+  return contributors;
 }
 
 function getRelatedMetrics(id, current, deltas) {
   const related = {
+    calls: ["Avg Duration", "Escalation Rate", "Ticket Rate"],
+    duration: ["Avg Duration", "Agent Efficiency", "Escalation Rate"],
     escalation: ["Ticket Rate", "Not Understood Rate", "Self-Resolved Rate"],
-    notunderstood: ["Escalation Rate", "Ticket Rate", "Intent Accuracy"],
-    sttconf: ["Intent Accuracy", "Not Understood Rate"],
+    notunderstood: ["Escalation Rate", "Ticket Rate", "Intent Accuracy", "STT Confidence"],
+    ticketrate: ["Escalation Rate", "Self-Resolved Rate"],
+    sttconf: ["Intent Accuracy", "Not Understood Rate", "Transcription Accuracy"],
+    transcriptacc: ["STT Confidence", "Not Understood Rate", "Intent Accuracy"],
+    audiosamples: ["STT Confidence", "Transcription Accuracy"],
     intentacc: ["Escalation Rate", "Ticket Rate", "Not Understood Rate"],
-    acceptance: ["Correction Delta", "Ticket Rate"],
-    correction: ["Acceptance Rate", "RM Edits"],
+    intentconf: ["Intent Accuracy", "Escalation Rate"],
+    latp50: ["Cost per Call", "Latency P95"],
+    latp95: ["Latency P50", "Cost per Call"],
+    costcall: ["Tokens Used", "Engine Mix", "Latency"],
+    acceptance: ["Correction Delta", "Ticket Rate", "Agent Quality"],
+    correction: ["Acceptance Rate", "Intent Accuracy"],
+    slots: ["Intent Accuracy", "Call Duration"],
   };
   const metrics = related[id] || [];
-  if (metrics.length === 0) return "No related metrics";
+  if (metrics.length === 0) return "No related metrics tracked";
   return metrics.map(m => `<div class="breakdown-row">• ${m}</div>`).join("");
 }
 

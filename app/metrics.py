@@ -110,6 +110,7 @@ def model_metrics(hours: float = 24 * 7):
     cost_usd = (sum(t["input_tokens"] or 0 for t in paid) / 1e6 * PRICE_IN
                 + sum(t["output_tokens"] or 0 for t in paid) / 1e6 * PRICE_OUT)
     errors = [t for t in turns if t["error"]]
+    stt_errors = [t for t in turns if t["stt_confidence"] is not None and t["stt_confidence"] < STT_CONFIDENCE_MIN]
 
     calls = db.q("SELECT * FROM calls WHERE started_at>=? AND status='ended'", (since,))
     tickets = db.q("SELECT category, rm_category, slot_completeness FROM tickets WHERE created_at>=?", (since,))
@@ -144,7 +145,9 @@ def model_metrics(hours: float = 24 * 7):
         "cost": {"usd": round(cost_usd, 4), "inr": round(cost_usd * USD_INR, 2),
                  "inr_per_call": round(cost_usd * USD_INR / len(calls), 3) if calls else 0},
         "stt": {"avg_confidence": round(statistics.mean(stt), 3) if stt else None,
+                "accuracy_pct": round(100 * (1 - len(stt_errors) / len(stt)), 1) if stt else None,
                 "low_conf_pct": _pct(sum(1 for s in stt if s < STT_CONFIDENCE_MIN), len(stt)),
+                "low_conf_count": len(stt_errors),
                 "samples": len(stt)},
         "intent": {"avg_confidence": round(statistics.mean(conf), 3) if conf else None,
                    "low_conf_pct": _pct(sum(1 for c in conf if c < INTENT_CONFIDENCE_MIN), len(conf)),
@@ -266,6 +269,7 @@ def metrics_trends(current_hours: float = 24 * 7, compare_to: str = "previous", 
     model_deltas = {}
     model_deltas["intent_accuracy"] = (model_m["intent"]["accuracy_pct"], None) if model_m["intent"]["accuracy_pct"] is not None else (None, None)
     model_deltas["stt_confidence"] = (round(model_m["stt"]["avg_confidence"] * 100, 1) if model_m["stt"]["avg_confidence"] else None, None)
+    model_deltas["intent_confidence"] = (round(model_m["intent"]["avg_confidence"] * 100, 1) if model_m["intent"]["avg_confidence"] else None, None)
     model_deltas["latency_p50"] = (model_m["latency_ms"]["p50"], None)
     model_deltas["cost_per_call"] = (model_m["cost"]["inr_per_call"], None)
 
