@@ -242,7 +242,8 @@ def assign_words(words: list[dict], turns: list[dict]) -> list[dict]:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from .logging_config import setup_logging
+    setup_logging("eko.diarize")
     if sys.argv[1:] == ["download"]:
         download()
         print("Models ready in", models_dir())

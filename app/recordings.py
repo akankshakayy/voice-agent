@@ -997,7 +997,8 @@ def _cli():
     sub.add_parser("export", help="draft scorecard cases -> evals/candidates.csv")
     sub.add_parser("cleanup", help="remove non-CSP and short recordings, reset failed ones")
     a = p.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from .logging_config import setup_logging
+    setup_logging("eko.recordings")
     from .seed import seed_if_demo
     seed_if_demo()                           # as when the server starts
     if a.cmd == "token":
