@@ -21,11 +21,12 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from . import agent, auth, bootstrap, db, google_auth, integrations, mailer, metrics, misheard, recordings, report, stt, telemetry, tts  # noqa: E402
+from .logging_config import setup_logging  # noqa: E402
 from .seed import seed_if_demo  # noqa: E402
 from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, MAX_MISUNDERSTOOD  # noqa
 
 STATIC = os.path.join(os.path.dirname(__file__), "..", "static")
-log = logging.getLogger("eko")
+log = setup_logging("eko")
 
 
 def _reap_stale_calls(stop: threading.Event):
@@ -702,6 +703,14 @@ def m_model(hours: float = 168):
 @app.get("/api/metrics/feedback", dependencies=[Depends(allow(*STAFF))])
 def m_feedback(hours: float = 168):
     return metrics.feedback_metrics(hours)
+
+
+@app.get("/api/metrics/trends", dependencies=[Depends(allow(*STAFF))])
+def m_trends(request: Request, hours: float = 168, compare_to: str = "previous",
+             rm_id: int | None = None, csp_id: int | None = None, intent: str | None = None,
+             prompt_version: str | None = None):
+    """Metrics comparison: current period vs previous/baseline with deltas."""
+    return metrics.metrics_trends(hours, compare_to, rm_scope(request, rm_id), csp_id, intent, prompt_version)
 
 
 @app.get("/api/calls/{call_id}/traces", dependencies=[Depends(allow(*STAFF))])

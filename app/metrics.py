@@ -211,3 +211,102 @@ def feedback_metrics(hours: float = 24 * 7):
                      WHERE source='ticket' AND ts>=? ORDER BY delta DESC, ts DESC LIMIT 10""", (since,))
     return {**summary(rows), "fields_changed": dict(per_field), "by_prompt_version": list(by_version.values()),
             "biggest_corrections": recent, "current_prompt_version": telemetry.prompt_version()}
+
+
+def _delta(current, previous):
+    """Compute absolute and percentage change between two values."""
+    if previous is None or previous == 0:
+        return None, None
+    abs_delta = current - previous
+    pct_delta = round(100 * abs_delta / abs(previous), 1) if previous != 0 else None
+    return round(abs_delta, 1), pct_delta
+
+
+def metrics_trends(current_hours: float = 24 * 7, compare_to: str = "previous", rm_id: int | None = None,
+                   csp_id: int | None = None, intent: str | None = None, prompt_version: str | None = None):
+    """Compare metrics across two time periods (current vs previous/baseline).
+
+    compare_to: 'previous' (same period ago) | 'baseline' (the deployed baseline)
+    Returns: current metrics, previous metrics, deltas, and trend analysis
+    """
+    current_m = agent_metrics(current_hours, rm_id)
+    model_m = model_metrics(current_hours)
+    feedback_m = feedback_metrics(current_hours)
+
+    # Get comparison metrics - compare current vs previous period
+    if compare_to == "previous":
+        since_current = db.now() - current_hours * 3600
+        since_previous = db.now() - (current_hours * 2) * 3600
+        previous_calls = db.q(f"""SELECT c.* FROM calls c
+                             WHERE c.started_at>=? AND c.started_at<? ORDER BY c.started_at DESC""",
+                            (since_previous, since_current))
+        # Compute previous period metrics
+        if previous_calls:
+            previous_ended = [c for c in previous_calls if c["status"] == "ended"]
+            durations = [c["duration_sec"] for c in previous_ended if c["duration_sec"] is not None]
+            previous_totals = {
+                "calls": len(previous_calls),
+                "avg_duration_sec": round(statistics.mean(durations), 1) if durations else 0,
+                "ticket_raise_rate": _pct(sum(1 for c in previous_ended if c["ticket_id"]), len(previous_ended)) if previous_ended else 0,
+                "escalation_rate": _pct(sum(1 for c in previous_ended if c["outcome"] == "escalated"), len(previous_ended)) if previous_ended else 0,
+                "not_understood_rate": _pct(sum(1 for c in previous_ended if c["outcome"] == "not_understood"), len(previous_ended)) if previous_ended else 0,
+                "agent_handled_rate": _pct(sum(1 for c in previous_ended if c["outcome"] in ("ticket_raised", "resolved_by_agent", "info_only")), len(previous_ended)) if previous_ended else 0,
+            }
+        else:
+            previous_totals = {k: 0 for k in ["calls", "avg_duration_sec", "ticket_raise_rate", "escalation_rate", "not_understood_rate", "agent_handled_rate"]}
+    else:
+        previous_totals = {}
+
+    # Compute deltas
+    agent_deltas = {}
+    for k in ["calls", "avg_duration_sec", "ticket_raise_rate", "escalation_rate", "not_understood_rate", "agent_handled_rate"]:
+        agent_deltas[k] = _delta(current_m["totals"].get(k, 0), previous_totals.get(k, 0))
+
+    # Model metrics deltas
+    model_deltas = {}
+    model_deltas["intent_accuracy"] = (model_m["intent"]["accuracy_pct"], None) if model_m["intent"]["accuracy_pct"] is not None else (None, None)
+    model_deltas["stt_confidence"] = (round(model_m["stt"]["avg_confidence"] * 100, 1) if model_m["stt"]["avg_confidence"] else None, None)
+    model_deltas["latency_p50"] = (model_m["latency_ms"]["p50"], None)
+    model_deltas["cost_per_call"] = (model_m["cost"]["inr_per_call"], None)
+
+    # Feedback metrics
+    feedback_deltas = {}
+    feedback_deltas["acceptance_rate"] = (feedback_m["acceptance_pct"], None) if feedback_m["acceptance_pct"] is not None else (None, None)
+    feedback_deltas["correction_delta"] = (feedback_m["correction_delta_pct"], None) if feedback_m["correction_delta_pct"] is not None else (None, None)
+
+    # Determine improving/degrading metrics
+    all_deltas = {**agent_deltas, **model_deltas, **feedback_deltas}
+    improving = []
+    degrading = []
+    for k, (d, p) in all_deltas.items():
+        if d is None:
+            continue
+        # For rate metrics, lower is often better (e.g., escalation_rate, not_understood_rate)
+        # For accuracy/acceptance/confidence, higher is better
+        if k in ("escalation_rate", "not_understood_rate", "correction_delta"):
+            if d < 0: improving.append(k)
+            elif d > 0: degrading.append(k)
+        else:
+            if d > 0: improving.append(k)
+            elif d < 0: degrading.append(k)
+
+    return {
+        "period": {"current_hours": current_hours, "compare_to": compare_to},
+        "current": {
+            "agent": current_m,
+            "model": model_m,
+            "feedback": feedback_m,
+        },
+        "previous": {
+            "agent": {"totals": previous_totals} if previous_totals else {},
+        },
+        "deltas": {
+            "agent": agent_deltas,
+            "model": model_deltas,
+            "feedback": feedback_deltas,
+        },
+        "summary": {
+            "improving": improving,
+            "degrading": degrading,
+        }
+    }

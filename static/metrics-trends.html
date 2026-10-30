@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Performance Trends · Eko Sahayak</title>
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" sizes="32x32" href="static/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="static/icons/favicon-16.png">
+<link rel="apple-touch-icon" href="static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="static/common.css">
+<script>try{var t=localStorage.getItem("eko-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<script src="static/vendor/chart.umd.min.js"></script>
+<style>
+  main { padding-bottom: 40px; }
+  .trends-controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 20px; background: var(--panel); padding: 16px; border-radius: 6px; }
+  .control-group { display: flex; gap: 8px; align-items: center; }
+  .control-group label { font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--muted); }
+  .control-group select, .control-group button { height: 32px; padding: 0 12px; }
+  .g2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .g3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 1200px) { .g3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 800px) { .g3, .g2 { grid-template-columns: 1fr; } .trends-controls { flex-direction: column; } }
+
+  .metric-card { background: var(--panel); padding: 16px; border-radius: 6px; border-left: 4px solid var(--accent); }
+  .metric-card.improving { border-left-color: #10b981; }
+  .metric-card.degrading { border-left-color: #ef4444; }
+  .metric-card.neutral { border-left-color: #6b7280; }
+
+  .metric-label { font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .metric-value { font-size: 24px; font-weight: 700; color: var(--text); }
+  .metric-delta { font-size: 13px; margin-top: 8px; display: flex; align-items: center; gap: 6px; }
+  .delta-arrow { font-size: 16px; }
+  .delta-arrow.up { color: #10b981; }
+  .delta-arrow.down { color: #ef4444; }
+  .delta-arrow.neutral { color: #6b7280; }
+  .delta-pct { font-weight: 600; }
+
+  .comparison-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .comparison-table th { background: var(--surface-alt); padding: 10px 12px; text-align: left; font-weight: 600; text-transform: uppercase; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .comparison-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .comparison-table tr:hover { background: var(--surface-alt); }
+  .metric-name { font-weight: 500; }
+  .metric-num { text-align: right; font-family: "SF Mono", Monaco, monospace; }
+
+  .chart-container { background: var(--panel); padding: 16px; border-radius: 6px; margin-top: 16px; }
+  .chart-box { position: relative; height: 300px; margin-top: 12px; }
+
+  .tag { display: inline-flex; align-items: center; gap: 6px; font: 700 11px var(--font-body); letter-spacing: .08em; text-transform: uppercase; color: #fff; background: var(--grad-btn); padding: 6px 12px; border-radius: 999px; }
+  .section-title { display: flex; align-items: center; gap: 12px; margin: 28px 0 16px; }
+  .section-title span { font-size: 16px; font-weight: 600; color: var(--text); }
+
+  .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
+  .empty-state p { margin: 8px 0; }
+</style>
+</head>
+<body>
+<header class="top" id="nav"></header>
+<main>
+  <div class="trends-controls">
+    <div class="control-group">
+      <label>Time Period:</label>
+      <select id="periodSelect">
+        <option value="24">Last 24 hours</option>
+        <option value="168" selected>Last 7 days</option>
+        <option value="720">Last 30 days</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label>Granularity:</label>
+      <select id="granularitySelect">
+        <option value="daily">Daily</option>
+        <option value="weekly" selected>Weekly</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label>Compare To:</label>
+      <select id="compareSelect">
+        <option value="previous" selected>Previous period</option>
+        <option value="baseline">Baseline</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label>RM Filter:</label>
+      <select id="rmFilter"><option value="">All RMs</option></select>
+    </div>
+
+    <div class="control-group">
+      <label>Intent Filter:</label>
+      <select id="intentFilter"><option value="">All intents</option></select>
+    </div>
+
+    <span class="flex"></span>
+    <button id="refreshBtn" class="secondary">↻ Refresh</button>
+  </div>
+
+  <!-- Status Summary -->
+  <div id="statusSummary" class="g3" style="display: none; margin-bottom: 16px;">
+    <div class="metric-card improving" style="display: none;" id="improvingCard">
+      <div class="metric-label">✓ Improving</div>
+      <div class="metric-value" id="improvingCount">0</div>
+      <div class="metric-delta"><span id="improvingList"></span></div>
+    </div>
+    <div class="metric-card neutral" id="stableCard" style="display: none;">
+      <div class="metric-label">≈ Stable</div>
+      <div class="metric-value" id="stableCount">0</div>
+    </div>
+    <div class="metric-card degrading" style="display: none;" id="degradingCard">
+      <div class="metric-label">✗ Degrading</div>
+      <div class="metric-value" id="degradingCount">0</div>
+      <div class="metric-delta"><span id="degradingList"></span></div>
+    </div>
+  </div>
+
+  <!-- Agent Metrics -->
+  <div class="section-title"><span class="tag">Agent Performance</span></div>
+  <div class="g3" id="agentMetrics"></div>
+  <div class="chart-container">
+    <h3>Agent Metrics Trend</h3>
+    <div class="chart-box"><canvas id="agentTrendChart"></canvas></div>
+  </div>
+
+  <!-- Model Metrics -->
+  <div class="section-title"><span class="tag" style="background: linear-gradient(135deg, #0aa2b5, #12a46c);">Model Performance</span></div>
+  <div class="g3" id="modelMetrics"></div>
+  <div class="chart-container">
+    <h3>Model Metrics Comparison</h3>
+    <div id="modelComparison"></div>
+  </div>
+
+  <!-- Quality Metrics -->
+  <div class="section-title"><span class="tag" style="background: linear-gradient(135deg, #d946ef, #ec4899);">Quality & Corrections</span></div>
+  <div class="g3" id="qualityMetrics"></div>
+  <div class="chart-container">
+    <h2>Detailed Comparison</h2>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Current</th>
+          <th>Previous</th>
+          <th>Change</th>
+          <th>% Change</th>
+        </tr>
+      </thead>
+      <tbody id="comparisonTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Alerts/Insights -->
+  <div class="section-title"><span class="tag" style="background: linear-gradient(135deg, #f59e0b, #d97706);">Insights & Alerts</span></div>
+  <div id="insights" class="g2"></div>
+</main>
+
+<div class="drawer-bg" id="drawerBg"></div>
+<aside class="drawer" id="drawer"></aside>
+
+<script src="static/common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let currentData = null, charts = {};
+const METRIC_LABELS = {
+  calls: "Total Calls",
+  avg_duration_sec: "Avg Duration (sec)",
+  ticket_raise_rate: "Ticket Raise Rate (%)",
+  escalation_rate: "Escalation Rate (%)",
+  not_understood_rate: "Not Understood (%)",
+  agent_handled_rate: "Agent Handled (%)",
+  tickets_created: "Tickets Created",
+  avg_resolution_hours: "Avg Resolution (hours)",
+  sla_breached: "SLA Breached",
+  intent_accuracy: "Intent Accuracy (%)",
+  stt_confidence: "STT Confidence (%)",
+  latency_p50: "Latency P50 (ms)",
+  cost_per_call: "Cost per Call (₹)",
+  acceptance_rate: "Acceptance Rate (%)",
+  correction_delta: "Correction Delta (%)"
+};
+
+(async () => {
+  await loadConfig();
+  $("nav").innerHTML = navHtml("metrics-trends") + `<div class="right"><span class="small muted" id="updated"></span></div>`;
+  $("drawerBg").onclick = closeDrawer;
+
+  // Load filter options - use taxonomy if available
+  try {
+    const rmsResp = await api("api/rms");
+    if (Array.isArray(rmsResp) && rmsResp.length) {
+      $("rmFilter").innerHTML = '<option value="">All RMs</option>' + rmsResp.map(r => `<option value="${r.id}">${r.name || "Unknown"}</option>`).join("");
+    }
+  } catch (e) {
+    console.warn("Could not load RMs");
+  }
+
+  // Load intents - use available data
+  const intents = new Set();
+  try {
+    const recentCalls = await api("api/calls?limit=500");
+    if (Array.isArray(recentCalls)) {
+      recentCalls.forEach(c => { if (c.intent) intents.add(c.intent); });
+    }
+  } catch (e) {
+    console.warn("Could not load intents");
+  }
+  if (intents.size > 0) {
+    $("intentFilter").innerHTML = '<option value="">All intents</option>' + Array.from(intents).map(i => `<option value="${i}">${i}</option>`).join("");
+  }
+
+  $("periodSelect").onchange = refresh;
+  $("granularitySelect").onchange = refresh;
+  $("compareSelect").onchange = refresh;
+  $("rmFilter").onchange = refresh;
+  $("intentFilter").onchange = refresh;
+  $("refreshBtn").onclick = refresh;
+
+  refresh();
+})();
+
+async function refresh() {
+  const hours = +$("periodSelect").value;
+  const compareTo = $("compareSelect").value;
+  const rmId = $("rmFilter").value || null;
+  const intent = $("intentFilter").value || null;
+
+  try {
+    const url = new URL("api/metrics/trends", window.location.origin);
+    url.searchParams.append("hours", hours);
+    url.searchParams.append("compare_to", compareTo);
+    if (rmId) url.searchParams.append("rm_id", rmId);
+    if (intent) url.searchParams.append("intent", intent);
+
+    currentData = await fetch(url).then(r => r.json());
+    renderMetrics();
+    $("updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    console.error("Failed to load metrics:", e);
+    $("updated").textContent = "Error loading data";
+  }
+}
+
+function renderMetrics() {
+  if (!currentData) return;
+
+  const { current, deltas, summary } = currentData;
+  const { agent: agentCurr, model: modelCurr, feedback: fbCurr } = current;
+
+  // Render status summary
+  renderStatusSummary(summary);
+
+  // Agent Metrics
+  const agentCards = [
+    ["Calls", agentCurr.totals.calls, `${agentCurr.totals.inbound} in · ${agentCurr.totals.outbound} out`, deltas.agent.calls],
+    ["Avg Duration", fmtDur(agentCurr.totals.avg_duration_sec), `Median ${fmtDur(agentCurr.totals.median_duration_sec)}`, deltas.agent.avg_duration_sec],
+    ["Ticket Raise Rate", agentCurr.totals.ticket_raise_rate + "%", "of completed calls", deltas.agent.ticket_raise_rate],
+    ["Escalation Rate", agentCurr.totals.escalation_rate + "%", "escalated to RM", deltas.agent.escalation_rate],
+    ["Not Understood", agentCurr.totals.not_understood_rate + "%", "marked & sent to RM", deltas.agent.not_understood_rate],
+    ["Agent Handled", agentCurr.totals.agent_handled_rate + "%", "without escalation", deltas.agent.agent_handled_rate],
+  ];
+  $("agentMetrics").innerHTML = agentCards.map(([label, val, sub, delta]) => renderMetricCard(label, val, sub, delta)).join("");
+
+  // Model Metrics
+  const modelCards = [
+    ["Intent Accuracy", modelCurr.intent.accuracy_pct != null ? modelCurr.intent.accuracy_pct + "%" : "–", `${modelCurr.intent.labelled_tickets} tickets labeled`, null],
+    ["STT Confidence", modelCurr.stt.avg_confidence != null ? (modelCurr.stt.avg_confidence * 100).toFixed(1) + "%" : "–", `${modelCurr.stt.low_conf_pct}% below threshold`, null],
+    ["Latency P50/P95", modelCurr.latency_ms.p50 != null ? `${num(modelCurr.latency_ms.p50)} / ${num(modelCurr.latency_ms.p95)} ms` : "–", "time per turn", null],
+    ["Cost per Call", "₹" + num(modelCurr.cost.inr_per_call, 3), `Total: ₹${num(modelCurr.cost.inr, 2)}`, null],
+    ["Slot Completeness", modelCurr.slot_completeness_pct != null ? modelCurr.slot_completeness_pct + "%" : "–", "required fields filled", null],
+    ["Turns per Call", modelCurr.avg_turns_per_call, `${modelCurr.misunderstood_turn_pct}% misunderstood`, null],
+  ];
+  $("modelMetrics").innerHTML = modelCards.map(([label, val, sub, delta]) => renderMetricCard(label, val, sub, delta)).join("");
+
+  // Quality Metrics
+  const qualityCards = [
+    ["Acceptance Rate", fbCurr.acceptance_pct != null ? fbCurr.acceptance_pct + "%" : "–", `${fbCurr.reviewed} tickets reviewed`, null],
+    ["Correction Delta", fbCurr.correction_delta_pct != null ? fbCurr.correction_delta_pct + "%" : "–", "avg text changed", null],
+    ["Avg Chars Changed", fbCurr.avg_chars_changed != null ? num(fbCurr.avg_chars_changed) : "–", "per correction", null],
+  ];
+  $("qualityMetrics").innerHTML = qualityCards.map(([label, val, sub, delta]) => renderMetricCard(label, val, sub, delta)).join("");
+
+  // Render comparison table
+  renderComparisonTable(agentCurr, modelCurr, fbCurr, deltas);
+
+  // Render insights
+  renderInsights(currentData);
+}
+
+function renderStatusSummary(summary) {
+  if (!summary) return;
+
+  const { improving = [], degrading = [] } = summary;
+  const stable = Object.keys(METRIC_LABELS).length - improving.length - degrading.length;
+
+  if (improving.length === 0 && degrading.length === 0 && stable === 0) {
+    $("statusSummary").style.display = "none";
+    return;
+  }
+
+  $("statusSummary").style.display = "grid";
+
+  if (improving.length > 0) {
+    $("improvingCard").style.display = "block";
+    $("improvingCount").textContent = improving.length;
+    $("improvingList").textContent = improving.map(m => METRIC_LABELS[m] || m).join(", ");
+  } else {
+    $("improvingCard").style.display = "none";
+  }
+
+  if (degrading.length > 0) {
+    $("degradingCard").style.display = "block";
+    $("degradingCount").textContent = degrading.length;
+    $("degradingList").textContent = degrading.map(m => METRIC_LABELS[m] || m).join(", ");
+  } else {
+    $("degradingCard").style.display = "none";
+  }
+}
+
+function renderMetricCard(label, value, subtitle, delta) {
+  const [absDelta, pctDelta] = delta || [null, null];
+  let deltaClass = "neutral";
+  let deltaHtml = "";
+
+  if (absDelta !== null) {
+    const isPositive = label.includes("Accuracy") || label.includes("Handled") || label.includes("Confidence") || label.includes("Completeness") || label.includes("Acceptance");
+    const direction = (isPositive ? absDelta > 0 : absDelta < 0) ? "up" : "down";
+    deltaClass = direction === "up" ? "improving" : (absDelta !== 0 ? "degrading" : "neutral");
+    const arrow = direction === "up" ? "↑" : "↓";
+    deltaHtml = `<div class="metric-delta"><span class="delta-arrow ${direction === "up" ? "up" : "down"}">${arrow}</span><span class="delta-pct">${Math.abs(absDelta)} (${pctDelta}%)</span></div>`;
+  }
+
+  return `<div class="metric-card ${deltaClass}">
+    <div class="metric-label">${label}</div>
+    <div class="metric-value">${value}</div>
+    <div class="metric-delta" style="font-size: 11px; margin-top: 4px;">${subtitle}</div>
+    ${deltaHtml}
+  </div>`;
+}
+
+function renderComparisonTable(agent, model, feedback, deltas) {
+  const rows = [];
+
+  const metrics = [
+    ["Total Calls", agent.totals.calls, null, deltas.agent.calls],
+    ["Avg Duration (sec)", agent.totals.avg_duration_sec, null, deltas.agent.avg_duration_sec],
+    ["Ticket Raise Rate (%)", agent.totals.ticket_raise_rate, null, deltas.agent.ticket_raise_rate],
+    ["Escalation Rate (%)", agent.totals.escalation_rate, null, deltas.agent.escalation_rate],
+    ["Intent Accuracy (%)", model.intent.accuracy_pct, null, null],
+    ["STT Confidence (%)", model.stt.avg_confidence ? (model.stt.avg_confidence * 100).toFixed(1) : null, null, null],
+    ["Latency P50 (ms)", model.latency_ms.p50, null, null],
+    ["Cost per Call (₹)", model.cost.inr_per_call, null, null],
+    ["Acceptance Rate (%)", feedback.acceptance_pct, null, null],
+  ];
+
+  $("comparisonTable").innerHTML = metrics.map(([name, curr, prev, delta]) => {
+    const [absDelta, pctDelta] = delta || [null, null];
+    return `<tr>
+      <td class="metric-name">${name}</td>
+      <td class="metric-num">${curr != null ? (typeof curr === "number" ? curr.toFixed(curr > 100 ? 0 : 1) : curr) : "–"}</td>
+      <td class="metric-num">${prev != null ? prev.toFixed(prev > 100 ? 0 : 1) : "–"}</td>
+      <td class="metric-num">${absDelta != null ? (absDelta > 0 ? "+" : "") + absDelta.toFixed(1) : "–"}</td>
+      <td class="metric-num">${pctDelta != null ? (pctDelta > 0 ? "+" : "") + pctDelta.toFixed(1) + "%" : "–"}</td>
+    </tr>`;
+  }).join("");
+}
+
+function renderInsights(data) {
+  const insights = [];
+  const { current, deltas } = data;
+
+  // High call volume
+  if (current.agent.totals.calls > 100) {
+    insights.push(["📞", `High volume: ${current.agent.totals.calls} calls processed`, "good"]);
+  }
+
+  // High escalation rate
+  if (current.agent.totals.escalation_rate > 50) {
+    insights.push(["⚠️", `High escalation: ${current.agent.totals.escalation_rate}% escalated to RM`, "alert"]);
+  }
+
+  // Low accuracy
+  if (current.model.intent.accuracy_pct && current.model.intent.accuracy_pct < 70) {
+    insights.push(["❌", `Low accuracy: ${current.model.intent.accuracy_pct}% intent accuracy`, "alert"]);
+  }
+
+  // Improving accuracy
+  if (deltas.model.intent_accuracy && deltas.model.intent_accuracy[0] > 0) {
+    insights.push(["✅", `Accuracy improving: +${deltas.model.intent_accuracy[0].toFixed(1)}%`, "good"]);
+  }
+
+  // High correction rate
+  if (current.feedback.correction_delta_pct && current.feedback.correction_delta_pct > 30) {
+    insights.push(["✏️", `High corrections: ${current.feedback.correction_delta_pct}% of text changed`, "alert"]);
+  }
+
+  // Cost trend
+  if (current.model.cost.inr_per_call > 10) {
+    insights.push(["💰", `Cost per call: ₹${current.model.cost.inr_per_call.toFixed(2)}`, "neutral"]);
+  }
+
+  if (insights.length === 0) {
+    $("insights").innerHTML = '<div class="empty-state"><p>All metrics looking good!</p></div>';
+  } else {
+    $("insights").innerHTML = insights.map(([icon, text, level]) => `
+      <div class="metric-card ${level === "good" ? "improving" : level === "alert" ? "degrading" : "neutral"}">
+        <div style="font-size: 20px; margin-bottom: 8px;">${icon}</div>
+        <div>${text}</div>
+      </div>
+    `).join("");
+  }
+}
+</script>
+</body>
+</html>
