@@ -10,8 +10,11 @@
 <link rel="stylesheet" href="static/common.css">
 <script>try{var t=localStorage.getItem("eko-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <style>
-  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-  .filters input { flex: 1; min-width: 200px; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+  .filters input, .filters select { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); font-size: 13px; }
+  .filters input[type="date"] { min-width: 140px; }
+  .filters input:focus, .filters select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent); }
+  .filters input[type="text"] { flex: 1; min-width: 200px; }
   .upload { display: grid; gap: 10px; }
   .upload .row { display: grid; grid-template-columns: 2fr 1.2fr 1fr 1.2fr auto; gap: 8px; align-items: end; }
   .upload label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -105,6 +108,8 @@
       <select id="fStatus"><option value="">All statuses</option><option value="check">To check: least sure first</option><option value="done">Processed</option><option value="new">Waiting</option><option value="failed">Failed</option></select>
       <select id="fCat"><option value="">All issue types</option></select>
       <select id="fRm" hidden><option value="">All RMs</option></select>
+      <input id="fDateFrom" type="date" placeholder="From date">
+      <input id="fDateTo" type="date" placeholder="To date">
       <input id="fSearch" placeholder="Search CSP, number, summary, transcript…">
     </div>
     <div class="table-wrap"><table>
@@ -164,7 +169,7 @@ const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
     $("uRm").innerHTML = opts + `<option value="0">No RM (not an RM call)</option>`;
     $("fRm").innerHTML += opts;
   }
-  ["fStatus", "fCat", "fRm"].forEach(id => $(id).onchange = render);
+  ["fStatus", "fCat", "fRm", "fDateFrom", "fDateTo"].forEach(id => $(id).onchange = render);
   $("fSearch").oninput = render;
   $("drawerBg").onclick = closeDrawer;
   $("uploadForm").onsubmit = upload;
@@ -201,9 +206,28 @@ async function refresh() {
 
 function render() {
   const st = $("fStatus").value, cat = $("fCat").value, rm = $("fRm").value, q = $("fSearch").value.toLowerCase();
+  const dateFrom = $("fDateFrom").value ? new Date($("fDateFrom").value) : null;
+  const dateTo = $("fDateTo").value ? new Date($("fDateTo").value) : null;
+
   const base = st === "check" ? checkQueue() : ROWS;
-  const rows = base.filter(r => (!st || st === "check" || r.status === st) && (!cat || (r.intent || "unknown") === cat) && (!rm || String(r.rm_id) === rm)
-    && (!q || JSON.stringify([r.csp_name, r.csp_code, r.other_number, r.summary, r.orig_name, r.rm_name]).toLowerCase().includes(q)));
+  const rows = base.filter(r => {
+    if (st && st !== "check" && r.status !== st) return false;
+    if (cat && (r.intent || "unknown") !== cat) return false;
+    if (rm && String(r.rm_id) !== rm) return false;
+    if (q && !JSON.stringify([r.csp_name, r.csp_code, r.other_number, r.summary, r.orig_name, r.rm_name]).toLowerCase().includes(q)) return false;
+
+    // Date filtering: check if recording date falls within the selected range
+    const recTime = new Date((r.started_at || r.uploaded_at) * 1000);
+    if (dateFrom) {
+      dateFrom.setHours(0, 0, 0, 0);
+      if (recTime < dateFrom) return false;
+    }
+    if (dateTo) {
+      dateTo.setHours(23, 59, 59, 999);
+      if (recTime > dateTo) return false;
+    }
+    return true;
+  });
   $("rows").innerHTML = rows.length ? rows.map(r => `<tr class="clickable" onclick="openRec(${r.id})">
       <td class="nowrap">${fmtTime(r.started_at || r.uploaded_at)}<div class="small muted">${r.direction === "incoming" ? "CSP called" : r.direction === "outgoing" ? "RM called" : ""}</div></td>
       <td>${esc(r.rm_name || "–")}</td>
