@@ -182,7 +182,7 @@ const METRIC_LABELS = {
 (async () => {
   await loadConfig();
   $("nav").innerHTML = navHtml("metrics-trends") + `<div class="right"><span class="small muted" id="updated"></span></div>`;
-  $("drawerBg").onclick = closeDrawer;
+  if ($("drawerBg")) $("drawerBg").onclick = () => { const d = $("drawer"); if (d) d.classList.remove("show"); };
 
   // Load filter options - use taxonomy if available
   try {
@@ -225,13 +225,11 @@ async function refresh() {
   const intent = $("intentFilter").value || null;
 
   try {
-    const url = new URL("api/metrics/trends", window.location.origin);
-    url.searchParams.append("hours", hours);
-    url.searchParams.append("compare_to", compareTo);
-    if (rmId) url.searchParams.append("rm_id", rmId);
-    if (intent) url.searchParams.append("intent", intent);
+    let url = `api/metrics/trends?hours=${hours}&compare_to=${compareTo}`;
+    if (rmId) url += `&rm_id=${rmId}`;
+    if (intent) url += `&intent=${intent}`;
 
-    currentData = await fetch(url).then(r => r.json());
+    currentData = await api(url);
     renderMetrics();
     $("updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (e) {
