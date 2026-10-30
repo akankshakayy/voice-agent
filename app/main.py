@@ -1160,7 +1160,12 @@ def revoke_upload_token(token_id: int):
 
 @app.get("/api/recordings", dependencies=[Depends(allow("admin", "ops", "rm"))])
 def list_recordings(request: Request, status: str | None = None, rm_id: int | None = None, limit: int = 500):
-    rm_id = rm_scope(request, rm_id)
+    u = request.state.user
+    # Admin/Ops: can view all recordings, or filter to specific RM if requested
+    # RM: can only view their own recordings (rm_id forced to their own)
+    if u.get("role") == "rm":
+        rm_id = u["rm_id"]  # RMs always see only their own recordings
+    # else: admin/ops see all if rm_id=None, or filtered if rm_id is specified
     return {"counts": recordings.summary_counts(rm_id), "recordings": recordings.list_recordings(status, rm_id, limit)}
 
 
@@ -1176,7 +1181,12 @@ def _own_recording(request: Request, rec_id: int) -> dict:
 def recordings_learning(request: Request, rm_id: int | None = None):
     """What people's corrections say: speech-to-text accuracy over time, how often the AI's issue was right,
     and the words speech-to-text keeps mishearing."""
-    return recordings.learning_stats(rm_scope(request, rm_id))
+    u = request.state.user
+    # Admin/Ops: can view metrics for all recordings, or filter to specific RM if requested
+    # RM: can only view metrics for their own recordings
+    if u.get("role") == "rm":
+        rm_id = u["rm_id"]  # RMs always see only their own metrics
+    return recordings.learning_stats(rm_id)
 
 
 class MisheardBlockBody(BaseModel):
