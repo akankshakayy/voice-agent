@@ -29,10 +29,13 @@
   .tag { display: inline-flex; align-items: center; gap: 6px; font: 700 11px var(--font-body); letter-spacing: .08em; text-transform: uppercase; color: #fff; background: var(--grad-btn); padding: 6px 12px; border-radius: 999px; }
 
   .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-bottom: 24px; }
-  .metric-card { background: var(--panel); padding: 16px; border-radius: 6px; border-top: 3px solid var(--accent); position: relative; }
+  .metric-card { background: var(--panel); padding: 16px; border-radius: 6px; border-top: 3px solid var(--accent); position: relative; cursor: pointer; transition: all .2s; }
+  .metric-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); transform: translateY(-2px); }
   .metric-card.improving { border-top-color: #10b981; }
   .metric-card.degrading { border-top-color: #ef4444; }
   .metric-card.neutral { border-top-color: #6b7280; }
+  .metric-card .clickhint { position: absolute; top: 8px; right: 8px; font-size: 12px; color: var(--muted); opacity: 0; transition: opacity .2s; }
+  .metric-card:hover .clickhint { opacity: 1; }
 
   .metric-label { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
   .metric-value { font-size: 28px; font-weight: 700; color: var(--text); line-height: 1; margin: 8px 0; }
@@ -44,18 +47,8 @@
   .delta-value { color: inherit; }
   .delta-pct { color: var(--muted); font-weight: 500; }
 
-  .metrics-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--panel); border-radius: 6px; overflow: hidden; }
-  .metrics-table th { background: var(--surface-alt); padding: 12px; text-align: left; font-weight: 600; text-transform: uppercase; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border); }
-  .metrics-table td { padding: 12px; border-bottom: 1px solid var(--border); }
-  .metrics-table tr:hover { background: var(--surface-alt); }
-  .metrics-table tr:last-child td { border-bottom: none; }
-  .metric-col { font-weight: 500; color: var(--text); }
-  .value-col { text-align: right; font-family: "SF Mono", Monaco, monospace; }
-  .change-col { text-align: right; font-weight: 600; }
-  .change-col.up { color: #10b981; }
-  .change-col.down { color: #ef4444; }
-
-  .insight-box { background: var(--panel); padding: 16px; border-radius: 6px; border-left: 4px solid var(--accent); margin-bottom: 12px; }
+  .insight-box { background: var(--panel); padding: 16px; border-radius: 6px; border-left: 4px solid var(--accent); margin-bottom: 12px; cursor: pointer; transition: all .2s; }
+  .insight-box:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
   .insight-box.positive { border-left-color: #10b981; }
   .insight-box.negative { border-left-color: #ef4444; }
   .insight-box.neutral { border-left-color: #6b7280; }
@@ -63,7 +56,25 @@
   .insight-title { font-weight: 600; margin-bottom: 4px; }
   .insight-text { font-size: 13px; color: var(--muted); }
 
+  /* Modal/Detail View */
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal-content { background: var(--panel); border-radius: 8px; padding: 24px; max-width: 600px; max-height: 80vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
+  .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .modal-header h2 { margin: 0; }
+  .modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: var(--muted); }
+  .modal-section { margin-bottom: 20px; }
+  .modal-section h3 { font-size: 14px; font-weight: 600; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  .detail-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .detail-row:last-child { border-bottom: none; }
+  .detail-label { font-weight: 500; }
+  .detail-value { text-align: right; font-family: "SF Mono", Monaco, monospace; }
+
   .empty { text-align: center; padding: 40px 20px; color: var(--muted); }
+  .loading { text-align: center; padding: 40px 20px; }
+
+  .metric-breakdown { background: var(--surface-alt); padding: 12px; border-radius: 4px; margin: 10px 0; font-size: 12px; }
+  .breakdown-row { display: flex; justify-content: space-between; padding: 6px 0; }
 
   @media (max-width: 1000px) {
     .metrics-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
@@ -72,6 +83,7 @@
     .metrics-grid { grid-template-columns: 1fr; }
     .metric-value { font-size: 20px; }
     .trends-header { flex-direction: column; }
+    .modal-content { max-width: 90vw; padding: 16px; }
   }
 </style>
 </head>
@@ -99,10 +111,6 @@
       <label>RM:</label>
       <select id="rmFilter"><option value="">All RMs</option></select>
     </div>
-    <div>
-      <label>Intent:</label>
-      <select id="intentFilter"><option value="">All intents</option></select>
-    </div>
     <span class="flex"></span>
     <button id="refreshBtn" class="secondary">↻ Refresh</button>
     <span id="updated" style="font-size:11px; color:var(--muted)">Loading…</span>
@@ -111,67 +119,67 @@
   <!-- Summary Banner -->
   <div id="summaryBanner"></div>
 
-  <!-- AGENT PERFORMANCE SECTION -->
-  <div class="section-header">
-    <h2>📞 Call Handling Performance</h2>
-    <span class="tag">Agent</span>
+  <!-- Loading State -->
+  <div id="loadingState" class="loading">
+    <p>Loading metrics...</p>
   </div>
-  <div class="metrics-grid" id="agentMetrics"></div>
 
-  <!-- TRANSCRIPTION & AUDIO SECTION -->
-  <div class="section-header">
-    <h2>🎤 Speech Recognition Quality</h2>
-    <span class="tag" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">Audio</span>
-  </div>
-  <div class="metrics-grid" id="audioMetrics"></div>
+  <!-- Dashboard Content -->
+  <div id="dashboardContent" style="display:none;">
+    <!-- AGENT PERFORMANCE SECTION -->
+    <div class="section-header">
+      <h2>📞 Call Handling Performance</h2>
+      <span class="tag">Agent</span>
+    </div>
+    <div class="metrics-grid" id="agentMetrics"></div>
 
-  <!-- INTENT UNDERSTANDING SECTION -->
-  <div class="section-header">
-    <h2>🧠 Intent Understanding</h2>
-    <span class="tag" style="background: linear-gradient(135deg, #0ea5e9, #06b6d4);">Model</span>
-  </div>
-  <div class="metrics-grid" id="intentMetrics"></div>
+    <!-- TRANSCRIPTION & AUDIO SECTION -->
+    <div class="section-header">
+      <h2>🎤 Speech Recognition Quality</h2>
+      <span class="tag" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">Audio</span>
+    </div>
+    <div class="metrics-grid" id="audioMetrics"></div>
 
-  <!-- PERFORMANCE & COST SECTION -->
-  <div class="section-header">
-    <h2>⚡ Latency & Efficiency</h2>
-    <span class="tag" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">Performance</span>
-  </div>
-  <div class="metrics-grid" id="perfMetrics"></div>
+    <!-- INTENT UNDERSTANDING SECTION -->
+    <div class="section-header">
+      <h2>🧠 Intent Understanding</h2>
+      <span class="tag" style="background: linear-gradient(135deg, #0ea5e9, #06b6d4);">Model</span>
+    </div>
+    <div class="metrics-grid" id="intentMetrics"></div>
 
-  <!-- QUALITY & CORRECTIONS SECTION -->
-  <div class="section-header">
-    <h2>✏️ RM Feedback & Corrections</h2>
-    <span class="tag" style="background: linear-gradient(135deg, #d946ef, #ec4899);">Quality</span>
-  </div>
-  <div class="metrics-grid" id="qualityMetrics"></div>
+    <!-- PERFORMANCE & COST SECTION -->
+    <div class="section-header">
+      <h2>⚡ Latency & Efficiency</h2>
+      <span class="tag" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">Performance</span>
+    </div>
+    <div class="metrics-grid" id="perfMetrics"></div>
 
-  <!-- WHAT CHANGED - ROOT CAUSE ANALYSIS -->
-  <div class="section-header">
-    <h2>📊 Key Changes & Drivers</h2>
-    <span class="tag" style="background: linear-gradient(135deg, #10b981, #14b8a6);">Analysis</span>
-  </div>
-  <div id="rootCauseAnalysis"></div>
+    <!-- QUALITY & CORRECTIONS SECTION -->
+    <div class="section-header">
+      <h2>✏️ RM Feedback & Corrections</h2>
+      <span class="tag" style="background: linear-gradient(135deg, #d946ef, #ec4899);">Quality</span>
+    </div>
+    <div class="metrics-grid" id="qualityMetrics"></div>
 
-  <!-- DETAILED COMPARISON TABLE -->
-  <div class="section-header">
-    <h2>📋 Full Metrics Comparison</h2>
-  </div>
-  <div style="overflow-x: auto;">
-    <table class="metrics-table">
-      <thead>
-        <tr>
-          <th>Metric</th>
-          <th class="value-col">Current</th>
-          <th class="value-col">Previous</th>
-          <th class="value-col">Absolute Change</th>
-          <th class="value-col">% Change</th>
-        </tr>
-      </thead>
-      <tbody id="comparisonTable"></tbody>
-    </table>
+    <!-- WHAT CHANGED - ROOT CAUSE ANALYSIS -->
+    <div class="section-header">
+      <h2>📊 Key Changes & Drivers</h2>
+      <span class="tag" style="background: linear-gradient(135deg, #10b981, #14b8a6);">Analysis</span>
+    </div>
+    <div id="rootCauseAnalysis"></div>
   </div>
 </main>
+
+<!-- Detail Modal -->
+<div class="modal-overlay" id="detailModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2 id="modalTitle">Metric Details</h2>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
 
 <div class="drawer-bg" id="drawerBg"></div>
 <aside class="drawer" id="drawer"></aside>
@@ -181,20 +189,12 @@
 const $ = id => document.getElementById(id);
 let currentData = null;
 
-const SECTION_INFO = {
-  agent: "How the agent is handling calls with callers",
-  audio: "Quality of transcription from speech to text",
-  intent: "Accuracy of understanding customer intent",
-  perf: "Speed and cost of agent responses",
-  quality: "How much RMs need to correct agent output"
-};
-
 (async () => {
   await loadConfig();
   $("nav").innerHTML = navHtml("metrics-trends") + `<div class="right"><span class="small muted" id="updated"></span></div>`;
-  if ($("drawerBg")) $("drawerBg").onclick = () => { const d = $("drawer"); if (d) d.classList.remove("show"); };
+  if ($("drawerBg")) $("drawerBg").onclick = () => closeModal();
 
-  // Load filter options
+  // Load RMs
   try {
     const rmsResp = await api("api/rms");
     if (Array.isArray(rmsResp) && rmsResp.length) {
@@ -205,7 +205,6 @@ const SECTION_INFO = {
   $("periodSelect").onchange = refresh;
   $("compareSelect").onchange = refresh;
   $("rmFilter").onchange = refresh;
-  $("intentFilter").onchange = refresh;
   $("refreshBtn").onclick = refresh;
 
   refresh();
@@ -216,92 +215,88 @@ async function refresh() {
   const compareTo = $("compareSelect").value;
   const rmId = $("rmFilter").value || null;
 
+  $("loadingState").style.display = "block";
+  $("dashboardContent").style.display = "none";
+
   try {
     let url = `api/metrics/trends?hours=${hours}&compare_to=${compareTo}`;
     if (rmId) url += `&rm_id=${rmId}`;
 
     currentData = await api(url);
+    console.log("Data loaded:", currentData);
+
+    $("loadingState").style.display = "none";
+    $("dashboardContent").style.display = "block";
     renderDashboard();
     $("updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (e) {
     console.error("Failed to load metrics:", e);
-    $("updated").textContent = "Error loading data";
+    $("loadingState").innerHTML = `<p style="color:red">Error loading data: ${e.message}</p>`;
+    $("updated").textContent = "Error";
   }
 }
 
 function renderDashboard() {
   if (!currentData) return;
+
   const { current, deltas, summary } = currentData;
   const { agent, model, feedback } = current;
 
-  // Summary banner
   renderSummaryBanner(summary, deltas);
 
   // Agent Metrics
   const agentMetrics = [
-    { label: "Total Calls", value: agent.totals.calls, sub: `${agent.totals.inbound} in, ${agent.totals.outbound} out`, delta: deltas.agent.calls },
-    { label: "Avg Duration", value: fmtDur(agent.totals.avg_duration_sec), sub: `Median: ${fmtDur(agent.totals.median_duration_sec)}`, delta: deltas.agent.avg_duration_sec },
-    { label: "Self-Resolved", value: agent.totals.self_resolved, sub: "No ticket needed", delta: null },
+    { id: "calls", label: "Total Calls", value: agent.totals.calls, sub: `${agent.totals.inbound} in, ${agent.totals.outbound} out`, delta: deltas.agent.calls, type: "agent" },
+    { id: "duration", label: "Avg Duration", value: fmtDur(agent.totals.avg_duration_sec), sub: `Median: ${fmtDur(agent.totals.median_duration_sec)}`, delta: deltas.agent.avg_duration_sec, type: "agent" },
+    { id: "selfresolved", label: "Self-Resolved", value: agent.totals.self_resolved, sub: "No ticket needed", delta: null, type: "agent" },
+    { id: "ticketrate", label: "Ticket Rate", value: agent.totals.ticket_raise_rate + "%", sub: "of completed calls", delta: deltas.agent.ticket_raise_rate, type: "agent" },
+    { id: "escalation", label: "Escalation Rate", value: agent.totals.escalation_rate + "%", sub: "escalated to RM", delta: deltas.agent.escalation_rate, type: "agent" },
+    { id: "notunderstood", label: "Not Understood", value: agent.totals.not_understood_rate + "%", sub: "sent to RM", delta: deltas.agent.not_understood_rate, type: "agent" },
   ];
   $("agentMetrics").innerHTML = agentMetrics.map(m => renderMetricCard(m)).join("");
 
-  // Ticket metrics
-  const ticketMetrics = [
-    { label: "Ticket Rate", value: agent.totals.ticket_raise_rate + "%", sub: "of completed calls", delta: deltas.agent.ticket_raise_rate },
-    { label: "Escalation Rate", value: agent.totals.escalation_rate + "%", sub: "escalated to RM", delta: deltas.agent.escalation_rate },
-    { label: "Not Understood", value: agent.totals.not_understood_rate + "%", sub: "sent to RM", delta: deltas.agent.not_understood_rate },
-  ];
-  const existingAgentHTML = $("agentMetrics").innerHTML;
-  $("agentMetrics").innerHTML = existingAgentHTML + ticketMetrics.map(m => renderMetricCard(m)).join("");
-
-  // Audio/Transcription Metrics
+  // Audio Metrics
   const audioMetrics = [
-    { label: "STT Confidence", value: model.stt.avg_confidence != null ? (model.stt.avg_confidence * 100).toFixed(1) + "%" : "–", sub: `${model.stt.low_conf_pct}% below threshold`, delta: null, info: "Speech recognition accuracy" },
-    { label: "Audio Samples", value: model.stt.samples || "0", sub: "turns analyzed", delta: null },
+    { id: "sttconf", label: "STT Confidence", value: model.stt.avg_confidence != null ? (model.stt.avg_confidence * 100).toFixed(1) + "%" : "–", sub: `${model.stt.low_conf_pct}% below threshold`, delta: null, type: "audio" },
+    { id: "audiosamples", label: "Audio Samples", value: model.stt.samples || "0", sub: "turns analyzed", delta: null, type: "audio" },
   ];
   $("audioMetrics").innerHTML = audioMetrics.map(m => renderMetricCard(m)).join("");
 
-  // Intent Understanding
+  // Intent Metrics
   const intentMetrics = [
-    { label: "Intent Accuracy", value: model.intent.accuracy_pct != null ? model.intent.accuracy_pct + "%" : "–", sub: `${model.intent.labelled_tickets} tickets labeled`, delta: null, info: "RM-confirmed accuracy" },
-    { label: "Intent Confidence", value: model.intent.avg_confidence != null ? (model.intent.avg_confidence * 100).toFixed(1) + "%" : "–", sub: `${model.intent.low_conf_pct}% low confidence`, delta: null },
+    { id: "intentacc", label: "Intent Accuracy", value: model.intent.accuracy_pct != null ? model.intent.accuracy_pct + "%" : "–", sub: `${model.intent.labelled_tickets} tickets labeled`, delta: null, type: "intent" },
+    { id: "intentconf", label: "Intent Confidence", value: model.intent.avg_confidence != null ? (model.intent.avg_confidence * 100).toFixed(1) + "%" : "–", sub: `${model.intent.low_conf_pct}% low`, delta: null, type: "intent" },
   ];
   $("intentMetrics").innerHTML = intentMetrics.map(m => renderMetricCard(m)).join("");
 
-  // Performance & Cost
+  // Performance Metrics
   const perfMetrics = [
-    { label: "Latency P50", value: model.latency_ms.p50 != null ? num(model.latency_ms.p50) + " ms" : "–", sub: "50th percentile", delta: null },
-    { label: "Latency P95", value: model.latency_ms.p95 != null ? num(model.latency_ms.p95) + " ms" : "–", sub: "95th percentile", delta: null },
-    { label: "Cost per Call", value: "₹" + num(model.cost.inr_per_call, 2), sub: `Total: ₹${num(model.cost.inr, 2)}`, delta: null },
+    { id: "latp50", label: "Latency P50", value: model.latency_ms.p50 != null ? num(model.latency_ms.p50) + " ms" : "–", sub: "50th percentile", delta: null, type: "perf" },
+    { id: "latp95", label: "Latency P95", value: model.latency_ms.p95 != null ? num(model.latency_ms.p95) + " ms" : "–", sub: "95th percentile", delta: null, type: "perf" },
+    { id: "costcall", label: "Cost per Call", value: "₹" + num(model.cost.inr_per_call, 2), sub: `Total: ₹${num(model.cost.inr, 2)}`, delta: null, type: "perf" },
   ];
   $("perfMetrics").innerHTML = perfMetrics.map(m => renderMetricCard(m)).join("");
 
   // Quality Metrics
   const qualityMetrics = [
-    { label: "Acceptance Rate", value: feedback.acceptance_pct != null ? feedback.acceptance_pct + "%" : "–", sub: `${feedback.reviewed} tickets reviewed`, delta: null, info: "RM accepted agent output" },
-    { label: "Correction Delta", value: feedback.correction_delta_pct != null ? feedback.correction_delta_pct + "%" : "–", sub: "avg text changed", delta: null },
-    { label: "Slot Completeness", value: model.slot_completeness_pct != null ? model.slot_completeness_pct + "%" : "–", sub: "required fields filled", delta: null },
+    { id: "acceptance", label: "Acceptance Rate", value: feedback.acceptance_pct != null ? feedback.acceptance_pct + "%" : "–", sub: `${feedback.reviewed} tickets reviewed`, delta: null, type: "quality" },
+    { id: "correction", label: "Correction Delta", value: feedback.correction_delta_pct != null ? feedback.correction_delta_pct + "%" : "–", sub: "avg text changed", delta: null, type: "quality" },
+    { id: "slots", label: "Slot Completeness", value: model.slot_completeness_pct != null ? model.slot_completeness_pct + "%" : "–", sub: "fields filled", delta: null, type: "quality" },
   ];
   $("qualityMetrics").innerHTML = qualityMetrics.map(m => renderMetricCard(m)).join("");
 
-  // Root Cause Analysis
   renderRootCauseAnalysis(deltas);
-
-  // Comparison Table
-  renderComparisonTable(agent, model, feedback, deltas);
 }
 
 function renderMetricCard(m) {
-  const { label, value, sub, delta, info } = m;
-  if (delta === null) delta = [null, null];
+  const { id, label, value, sub, delta, type } = m;
   const [absDelta, pctDelta] = delta || [null, null];
 
   let deltaClass = "neutral";
   let deltaHTML = "";
 
   if (absDelta !== null) {
-    // Context-aware: lower is better for rate metrics
-    const lowerIsBetter = label.includes("Rate") || label.includes("Correction") || label.includes("Escalation");
+    const lowerIsBetter = label.includes("Rate") || label.includes("Correction") || label.includes("Latency");
     const isGood = lowerIsBetter ? absDelta < 0 : absDelta > 0;
     const arrow = isGood ? "↑" : "↓";
     const arrowClass = isGood ? "up" : "down";
@@ -314,8 +309,9 @@ function renderMetricCard(m) {
     </div>`;
   }
 
-  return `<div class="metric-card ${deltaClass}">
-    <div class="metric-label">${label}${info ? ` <small style="color:var(--muted)">${info}</small>` : ""}</div>
+  return `<div class="metric-card ${deltaClass}" onclick="showMetricDetail('${id}', '${label}', ${absDelta || null}, ${pctDelta || null})">
+    <span class="clickhint">Click for details →</span>
+    <div class="metric-label">${label}</div>
     <div class="metric-value">${value}</div>
     <div class="metric-sub">${sub}</div>
     ${deltaHTML}
@@ -349,52 +345,48 @@ function renderRootCauseAnalysis(deltas) {
   const insights = [];
   const allDeltas = deltas.agent;
 
-  // Analyze patterns
   if (allDeltas.escalation_rate && allDeltas.escalation_rate[0] < 0) {
     insights.push({
       title: "✅ Escalations decreasing",
       text: `Fewer calls being escalated (${Math.abs(allDeltas.escalation_rate[0]).toFixed(1)}% reduction). Agent handling more issues autonomously.`,
-      type: "positive"
+      type: "positive",
+      factors: ["Better intent understanding", "Improved model confidence", "More self-resolution"]
     });
   }
 
   if (allDeltas.escalation_rate && allDeltas.escalation_rate[0] > 0) {
     insights.push({
       title: "⚠️ Escalations increasing",
-      text: `More calls escalated to RMs (+${allDeltas.escalation_rate[0].toFixed(1)}%). May indicate model confidence issues.`,
-      type: "negative"
+      text: `More calls escalated to RMs (+${allDeltas.escalation_rate[0].toFixed(1)}%). Check model confidence and intent accuracy.`,
+      type: "negative",
+      factors: ["Lower intent accuracy", "Reduced model confidence", "Complex user queries"]
     });
   }
 
   if (allDeltas.not_understood_rate && allDeltas.not_understood_rate[0] < 0) {
     insights.push({
       title: "✅ Better understanding",
-      text: `Fewer 'not understood' cases (${Math.abs(allDeltas.not_understood_rate[0]).toFixed(1)}% decrease). Intent model is improving.`,
-      type: "positive"
+      text: `Fewer 'not understood' cases (${Math.abs(allDeltas.not_understood_rate[0]).toFixed(1)}% decrease). Intent model improving.`,
+      type: "positive",
+      factors: ["Improved intent detection", "Better transcription", "Model training improvements"]
     });
   }
 
   if (allDeltas.ticket_raise_rate && allDeltas.ticket_raise_rate[0] < 0) {
     insights.push({
       title: "✅ Fewer tickets needed",
-      text: `Reduced ticket creation (${Math.abs(allDeltas.ticket_raise_rate[0]).toFixed(1)}% decrease). More issues resolved without escalation.`,
-      type: "positive"
+      text: `Reduced ticket creation (${Math.abs(allDeltas.ticket_raise_rate[0]).toFixed(1)}% decrease). More self-resolution.`,
+      type: "positive",
+      factors: ["Better agent decisions", "Improved automation", "Successful issue resolution"]
     });
   }
 
   if (allDeltas.avg_duration_sec && allDeltas.avg_duration_sec[0] < 0) {
     insights.push({
       title: "⚡ Faster responses",
-      text: `Average call duration decreased by ${Math.abs(allDeltas.avg_duration_sec[0]).toFixed(1)} seconds. Improved efficiency.`,
-      type: "positive"
-    });
-  }
-
-  if (allDeltas.avg_duration_sec && allDeltas.avg_duration_sec[0] > 0) {
-    insights.push({
-      title: "⏱️ Longer calls",
-      text: `Average call duration increased by ${allDeltas.avg_duration_sec[0].toFixed(1)} seconds. May indicate more complex issues or better engagement.`,
-      type: "neutral"
+      text: `Avg duration decreased by ${Math.abs(allDeltas.avg_duration_sec[0]).toFixed(1)}s. Improved efficiency.`,
+      type: "positive",
+      factors: ["Quicker intent matching", "Reduced latency", "Better context handling"]
     });
   }
 
@@ -402,46 +394,158 @@ function renderRootCauseAnalysis(deltas) {
     $("rootCauseAnalysis").innerHTML = '<div class="empty"><p>No significant changes detected</p></div>';
   } else {
     $("rootCauseAnalysis").innerHTML = insights.map(i => `
-      <div class="insight-box ${i.type}">
+      <div class="insight-box ${i.type}" onclick="showInsightDetail('${i.title}', '${i.text}', ${JSON.stringify(i.factors).replace(/"/g, '&quot;')})">
         <div class="insight-title">${i.title}</div>
         <div class="insight-text">${i.text}</div>
+        <div style="font-size:11px; color:var(--muted); margin-top:8px; opacity:0.7">Click to see contributing factors →</div>
       </div>
     `).join("");
   }
 }
 
-function renderComparisonTable(agent, model, feedback, deltas) {
-  const rows = [
-    // Agent
-    ["Calls", agent.totals.calls, "–", deltas.agent.calls],
-    ["Avg Duration (sec)", agent.totals.avg_duration_sec, "–", deltas.agent.avg_duration_sec],
-    ["Ticket Rate (%)", agent.totals.ticket_raise_rate, "–", deltas.agent.ticket_raise_rate],
-    ["Escalation Rate (%)", agent.totals.escalation_rate, "–", deltas.agent.escalation_rate],
-    ["Not Understood (%)", agent.totals.not_understood_rate, "–", deltas.agent.not_understood_rate],
-    // Audio
-    ["STT Confidence (%)", model.stt.avg_confidence ? (model.stt.avg_confidence * 100).toFixed(1) : "–", "–", null],
-    // Intent
-    ["Intent Accuracy (%)", model.intent.accuracy_pct || "–", "–", null],
-    ["Intent Confidence (%)", model.intent.avg_confidence ? (model.intent.avg_confidence * 100).toFixed(1) : "–", "–", null],
-    // Perf
-    ["Latency P50 (ms)", model.latency_ms.p50 || "–", "–", null],
-    ["Cost per Call (₹)", model.cost.inr_per_call, "–", null],
-    // Quality
-    ["Acceptance Rate (%)", feedback.acceptance_pct || "–", "–", null],
-    ["Correction Delta (%)", feedback.correction_delta_pct || "–", "–", null],
-  ];
+function showMetricDetail(id, label, absDelta, pctDelta) {
+  if (!currentData) return;
 
-  $("comparisonTable").innerHTML = rows.map(([name, curr, prev, delta]) => {
-    const [absDelta, pctDelta] = delta || [null, null];
-    const changeClass = absDelta ? (absDelta > 0 ? (name.includes("Rate") || name.includes("Correction") ? "down" : "up") : (name.includes("Rate") || name.includes("Correction") ? "up" : "down")) : "";
-    return `<tr>
-      <td class="metric-col">${name}</td>
-      <td class="value-col">${typeof curr === "number" ? curr.toFixed(curr > 100 ? 0 : 1) : curr}</td>
-      <td class="value-col">${prev}</td>
-      <td class="value-col change-col ${changeClass}">${absDelta != null ? (absDelta > 0 ? "+" : "") + absDelta.toFixed(1) : "–"}</td>
-      <td class="value-col change-col ${changeClass}">${pctDelta != null ? (pctDelta > 0 ? "+" : "") + pctDelta.toFixed(1) + "%" : "–"}</td>
-    </tr>`;
-  }).join("");
+  const { current, deltas } = currentData;
+  const { agent, model, feedback } = current;
+
+  let html = `
+    <div class="modal-section">
+      <h3>Current Value</h3>
+      <div class="detail-row">
+        <span class="detail-label">${label}</span>
+        <span class="detail-value">${getMetricValue(id, current)}</span>
+      </div>
+    </div>
+  `;
+
+  if (absDelta !== null) {
+    html += `
+      <div class="modal-section">
+        <h3>Change from Previous Period</h3>
+        <div class="detail-row">
+          <span class="detail-label">Absolute Change</span>
+          <span class="detail-value">${absDelta > 0 ? '+' : ''}${absDelta.toFixed(2)}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Percent Change</span>
+          <span class="detail-value">${pctDelta > 0 ? '+' : ''}${pctDelta.toFixed(1)}%</span>
+        </div>
+      </div>
+    `;
+  }
+
+  html += `
+    <div class="modal-section">
+      <h3>Interpretation</h3>
+      <div style="font-size:13px; line-height:1.6;">
+        ${getMetricInterpretation(id, current, deltas)}
+      </div>
+    </div>
+  `;
+
+  html += `
+    <div class="modal-section">
+      <h3>Related Metrics</h3>
+      <div style="font-size:12px;">
+        ${getRelatedMetrics(id, current, deltas)}
+      </div>
+    </div>
+  `;
+
+  $("modalTitle").textContent = `📊 ${label}`;
+  $("modalBody").innerHTML = html;
+  $("detailModal").classList.add("open");
+}
+
+function showInsightDetail(title, text, factors) {
+  let html = `
+    <div class="modal-section">
+      <h3>What Changed</h3>
+      <p style="font-size:13px; line-height:1.6;">${text}</p>
+    </div>
+
+    <div class="modal-section">
+      <h3>Contributing Factors</h3>
+      <div class="metric-breakdown">
+  `;
+
+  factors.forEach(f => {
+    html += `<div class="breakdown-row"><span>• ${f}</span></div>`;
+  });
+
+  html += `
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <h3>What to Monitor</h3>
+      <div class="metric-breakdown">
+        <div class="breakdown-row"><span>• Track this metric over next period</span></div>
+        <div class="breakdown-row"><span>• Monitor related metrics for consistency</span></div>
+        <div class="breakdown-row"><span>• Investigate if trend reverses</span></div>
+      </div>
+    </div>
+  `;
+
+  $("modalTitle").textContent = title;
+  $("modalBody").innerHTML = html;
+  $("detailModal").classList.add("open");
+}
+
+function getMetricValue(id, current) {
+  const { agent, model, feedback } = current;
+  const map = {
+    calls: agent.totals.calls,
+    duration: fmtDur(agent.totals.avg_duration_sec),
+    selfresolved: agent.totals.self_resolved,
+    ticketrate: agent.totals.ticket_raise_rate + "%",
+    escalation: agent.totals.escalation_rate + "%",
+    notunderstood: agent.totals.not_understood_rate + "%",
+    sttconf: (model.stt.avg_confidence * 100).toFixed(1) + "%",
+    audiosamples: model.stt.samples,
+    intentacc: model.intent.accuracy_pct + "%",
+    intentconf: (model.intent.avg_confidence * 100).toFixed(1) + "%",
+    latp50: num(model.latency_ms.p50) + " ms",
+    latp95: num(model.latency_ms.p95) + " ms",
+    costcall: "₹" + num(model.cost.inr_per_call, 2),
+    acceptance: feedback.acceptance_pct + "%",
+    correction: feedback.correction_delta_pct + "%",
+    slots: model.slot_completeness_pct + "%"
+  };
+  return map[id] || "–";
+}
+
+function getMetricInterpretation(id, current, deltas) {
+  const interpretations = {
+    escalation: `Escalation rate shows what percentage of completed calls are escalated to RMs. A decrease is positive (agent handling more autonomously). A increase suggests the agent needs improvement.`,
+    notunderstood: `This metric tracks calls where the agent doesn't understand the user. Lower is better. Decreases indicate better intent recognition or speech clarity.`,
+    sttconf: `Speech-to-text confidence measures how well the audio is being transcribed. Higher confidence (closer to 100%) means clearer audio and better transcription quality.`,
+    intentacc: `Intent accuracy is how often the agent correctly identifies what the user wants. This is ground truth from RM confirmation. Higher is always better.`,
+    costcall: `Average cost per call based on LLM usage. This helps track operational efficiency. Lower cost with same quality is an improvement.`,
+    acceptance: `Percentage of tickets where RMs accepted the agent's output without changes. Higher acceptance means better agent quality.`,
+    correction: `Average percentage of text that RMs had to change in tickets. Lower is better - means the agent is producing higher quality output.`,
+    latp50: `50th percentile latency (median response time). This is typical response speed. Lower is faster, better user experience.`,
+  };
+  return interpretations[id] || "Click on a metric card to see detailed analysis.";
+}
+
+function getRelatedMetrics(id, current, deltas) {
+  const related = {
+    escalation: ["Ticket Rate", "Not Understood Rate", "Self-Resolved Rate"],
+    notunderstood: ["Escalation Rate", "Ticket Rate", "Intent Accuracy"],
+    sttconf: ["Intent Accuracy", "Not Understood Rate"],
+    intentacc: ["Escalation Rate", "Ticket Rate", "Not Understood Rate"],
+    acceptance: ["Correction Delta", "Ticket Rate"],
+    correction: ["Acceptance Rate", "RM Edits"],
+  };
+  const metrics = related[id] || [];
+  if (metrics.length === 0) return "No related metrics";
+  return metrics.map(m => `<div class="breakdown-row">• ${m}</div>`).join("");
+}
+
+function closeModal() {
+  $("detailModal").classList.remove("open");
 }
 </script>
 </body>
