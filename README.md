@@ -1,14 +1,17 @@
-# Eko Sahayak: voice agent for RMs (v0.1)
+# Eko Sahayak: Voice Agent for RMs (v0.1)
 
-A voice agent that answers and makes calls to CSPs on behalf of Relationship Managers. It understands the
-issue (in Hindi or Hinglish), collects the details, raises a ticket, and escalates calls it can't handle.
-Everything shows up live on the dashboards.
+A voice agent that answers and makes calls to CSPs on behalf of Relationship Managers. It understands the issue (in Hindi or Hinglish), collects the details, raises a ticket, and escalates calls it can't handle. Everything shows up live on the dashboards.
+
+**Status:** ✅ Phase 1-4 deployed | Phase 5 (drift detection) in progress
+
+## 📊 Dashboards & Pages
 
 | Page | URL | What it shows |
 |---|---|---|
-| Call console | `/call` | Talk to the agent as a CSP using your mic or by typing. Inbound or outbound. |
-| RM dashboard | `/rm` | Escalation queue, tickets for the RM's CSPs, transcripts, status changes, category confirmation |
-| Agent & model performance | `/ops` | Live calls, volume, intent, outcome, duration, ticket lifecycle, intent accuracy, confidence, latency, tokens and cost |
+| **Call Console** | `/call` | Talk to the agent as a CSP using your mic or by typing. Inbound or outbound. |
+| **RM Dashboard** | `/rm` | Escalation queue, tickets for the RM's CSPs, transcripts, status changes, category confirmation |
+| **Agent & Model Performance** | `/ops` | Live calls, volume, intent, outcome, duration, ticket lifecycle, intent accuracy, confidence, latency, tokens and cost |
+| **Recordings** | `/recordings` | Review real RM–CSP call recordings, extracted use cases & subcases, accuracy metrics |
 
 ## Quick start
 
@@ -21,6 +24,16 @@ uvicorn app.main:app --reload --port 8000
 ```
 Open http://localhost:8000/call and click **Start call**. For a demo with made-up CSPs instead, use a separate
 database: `EKO_DB_PATH=data/demo.db DEMO_DATA=1 uvicorn app.main:app --port 8001` (the simulator only runs there).
+
+## 📚 Documentation
+
+| Document | What it covers |
+|----------|----------------|
+| **[USE_CASES.md](USE_CASES.md)** | 🎯 All 11 use cases (categories), their priorities, SLAs, required details, and tracking metrics. Edit this to add notes, track extraction rates, and document improvements. |
+| **[docs/USE_CASES_REVIEW.md](docs/USE_CASES_REVIEW.md)** | 📊 How to view & review use cases: 4 access methods (web dashboard, REST API, SQL queries, CLI export). Database schema and quality metrics. |
+| **[LOGGING.md](LOGGING.md)** | 📋 Logging configuration, where logs are stored (`data/logs/`), how to control verbosity with `LOG_LEVEL` env var, and file rotation (10MB per file). |
+| **[INTEGRATION.md](INTEGRATION.md)** | 🔌 Service API keys, webhooks, and integrations with other systems. |
+| **[evals/README.md](evals/README.md)** | ✅ Scorecard: measuring agent accuracy on real and test CSP calls. |
 
 **Engines.** Without an API key the agent runs on the **rules fallback engine**, which is free and works offline.
 With a key it uses an LLM:
@@ -37,6 +50,27 @@ With a key it uses an LLM:
 **Voice.** The agent speaks with a free Microsoft neural voice (`edge-tts`, Hindi `hi-IN-SwaraNeural`), generated
 on the server, so no browser voice is needed. For listening, a Groq key enables Whisper speech-to-text so the
 mic works in any browser; without it the mic uses the browser's Web Speech API (Chrome or Edge only).
+
+## 🎯 Use Cases & Issue Categories
+
+The agent handles **11 categories** of CSP issues, each with required details (slots) to collect:
+
+| Category | ID | Priority | Slots | Escalate? |
+|----------|----|----|----|----|
+| 💰 Money transfer failed | `dmt_failed` | HIGH | txn_id, amount, txn_date | — |
+| 💳 AePS withdrawal | `aeps_issue` | HIGH | txn_id, amount, txn_date, bank_name | — |
+| 📱 Wallet load | `wallet_topup` | HIGH | amount, utr_or_ref, txn_date, payment_mode | — |
+| 💼 Commission issue | `commission` | MEDIUM | month, product | — |
+| 📋 KYC/Onboarding | `kyc_onboarding` | MEDIUM | issue_detail | — |
+| 📲 App/Device/Login | `app_device` | MEDIUM | device_or_screen, error_message | — |
+| 🧾 Bill payment | `bbps_recharge` | MEDIUM | txn_id, amount, biller | — |
+| 🔄 Refund status | `refund_status` | MEDIUM | txn_id | — |
+| ⚠️ Fraud report | `fraud_report` | CRITICAL | issue_detail | ✅ ALWAYS |
+| 🎫 Complaint status | `ticket_status` | LOW | (self-serve, no new ticket) | — |
+| ❓ General query | `general_query` | LOW | issue_detail | — |
+
+**Track use cases:** Edit **[USE_CASES.md](USE_CASES.md)** to keep notes on extraction rates, accuracy, and improvements.  
+**View metrics:** Check `/recordings` dashboard or use `GET /api/recordings/learning` to see system accuracy over time.
 
 **Login and roles.** Every page and API needs an account, and only Eko employees can have one. Sign in with
 **Google** (an Eko Google account), or with email and password.
@@ -177,43 +211,78 @@ CSP speaks → speech-to-text (browser now, telephony later) → POST /api/calls
 * **Solved by the agent (first Phase-4 skill):** "mere complaint ka kya hua" is answered from the ticket DB, and no new ticket is raised.
 * **Unknown caller number:** the agent asks for the CSP ID and links the call to the right CSP and RM.
 
-## Metrics
+## 📈 Metrics & Monitoring
 
-**Agent workflow:** total, inbound and outbound calls, ongoing calls with live timers, average and median duration, intent mix,
-outcome mix, duration histogram, ticket-raised %, escalation %, not-understood %, % handled without the RM, ticket
-open/in-progress/closed counts, average time to close, SLA breaches, and a recent-calls table whose ticket status updates when the RM closes the ticket.
+### Agent Performance
+- Total, inbound, and outbound calls with live timers
+- Average & median call duration, volume distribution
+- Intent mix, outcome mix (resolved, escalated, etc.)
+- Ticket metrics: open/closed counts, time to close, SLA breaches
+- Escalation %, not-understood %, % handled without RM
 
-**Model:** intent accuracy (the agent's category vs the category the RM confirms in the ticket drawer, both overall and per category),
-top mix-ups, average intent confidence and % of turns with low confidence, speech-to-text confidence, NLU latency p50 and p95 (Claude-only too),
-how many required details were captured, turns per call, tokens, estimated cost in ₹ (`LLM_PRICE_*` in `.env`), and engine errors and fallbacks.
-Click any call to see per-turn data: STT confidence, intent, confidence, latency and engine.
+### Model Accuracy & Quality
+- **Intent accuracy:** agent's category vs RM's confirmation (overall + per category)
+- **Top mix-ups:** categories most often confused
+- **Intent confidence:** average confidence scores, % with low confidence
+- **Speech-to-text:** Whisper confidence scores
+- **Latency:** p50 and p95 (per engine, Claude-only metrics too)
+- **Details captured:** % of required slots extracted per category
+- **Tokens & cost:** per call, per category, cumulative (in ₹)
+- **Engine health:** fallback rate, errors, retry counts
+
+**View metrics:** Open `/ops` dashboard or query the API directly.
 
 > The simulator's tickets are confirmed with each scenario's *true* category, so accuracy on the demo
 > data is a real measurement of the engine. It is still only scripted data. Real accuracy comes from RMs
 > confirming categories on live tickets.
 
-## Project layout
+## 🔍 Logging & Debugging
+
+Logs are written to **data/logs/** with automatic rotation (10MB per file, keep 5 backups). Control verbosity:
+
+```bash
+LOG_LEVEL=DEBUG uvicorn app.main:app      # verbose: see everything
+LOG_LEVEL=INFO  uvicorn app.main:app      # normal (default)
+LOG_LEVEL=WARNING uvicorn app.main:app    # quiet
+```
+
+View live logs:
+```bash
+tail -f data/logs/eko.log
+```
+
+**See [LOGGING.md](LOGGING.md)** for detailed logging config, troubleshooting, and log analysis.
+
+## 📁 Project Layout
 
 ```
 app/
-  taxonomy.py      issue categories, required details, priorities, SLAs, thresholds  ← edit first
-  agent.py         call orchestrator: state, guards, escalation, ticketing
-  llm_engine.py    Claude engine (forced `agent_turn` tool call → structured output)
-  rules_engine.py  keyword/regex fallback engine
-  i18n.py          Hindi + English phrases, language choice and detection
-  auth.py          accounts, roles, password hashing, sessions, reset/verification links, email linking
-  mailer.py        account emails over SMTP (off until configured)
-  kb_import.py     imports Eko's calling sheet + slab table; the slab rule
-  synthetic.py     made-up test CSPs for each RM (the only CSPs the console can call while testing)
-  metrics.py       dashboard aggregations
-  simulator.py     synthetic CSP callers (live or backfill)
-  seed.py          made-up RMs and CSPs for tests, scorecard and simulator (data/demo.db)
-  recordings.py    call recordings pilot: uploads, transcription + review as calls arrive, export to the scorecard
-  integrations.py  service API keys and signed webhooks for other systems (see INTEGRATION.md)
-  db.py, main.py   SQLite + FastAPI
-static/            call console, RM dashboard, ops dashboard (vanilla JS + Chart.js, vendored)
-tests/             pytest suite (incl. a mocked Claude engine test)
-uploader/          Android app that uploads the RMs' Eko-SIM call recordings every day
+  taxonomy.py           issue categories, required details, priorities, SLAs ← EDIT FIRST to add/change use cases
+  agent.py              call orchestrator: state, guards, escalation, ticketing
+  llm_engine.py         Claude engine (forced `agent_turn` tool call → structured output)
+  rules_engine.py       keyword/regex fallback engine
+  logging_config.py     centralized logging with file rotation
+  i18n.py               Hindi + English phrases, language choice and detection
+  auth.py               accounts, roles, password hashing, sessions, links, email linking
+  mailer.py             account emails over SMTP (off until configured)
+  kb_import.py          imports Eko's calling sheet + slab table
+  synthetic.py          made-up test CSPs for each RM
+  metrics.py            dashboard aggregations
+  simulator.py          synthetic CSP callers (live or backfill)
+  seed.py               demo data for tests, scorecard, simulator (data/demo.db)
+  recordings.py         call recordings: upload, transcribe, review, extract use cases
+  integrations.py       service API keys and signed webhooks
+  db.py, main.py        SQLite + FastAPI
+static/                 call console, RM dashboard, ops dashboard, recordings UI (vanilla JS + Chart.js)
+tests/                  pytest suite (incl. mocked Claude engine test)
+uploader/               Android app that uploads RM phone recordings
+docs/
+  USE_CASES_REVIEW.md   how to view & review extracted use cases (4 access methods, schema, metrics)
+  *.md                  other guides
+scripts/
+  update_use_cases_metrics.py   populate USE_CASES.md with live metrics from database
+USE_CASES.md            editable tracker of all 11 use cases, priorities, slots, tracking metrics
+LOGGING.md              logging config, where logs go, how to debug
 ```
 
 ## Simulator
