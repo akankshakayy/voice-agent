@@ -206,8 +206,8 @@ async function refresh() {
 
 function render() {
   const st = $("fStatus").value, cat = $("fCat").value, rm = $("fRm").value, q = $("fSearch").value.toLowerCase();
-  const dateFrom = $("fDateFrom").value ? new Date($("fDateFrom").value) : null;
-  const dateTo = $("fDateTo").value ? new Date($("fDateTo").value) : null;
+  const dateFrom = $("fDateFrom").value ? (() => { const d = new Date($("fDateFrom").value); d.setHours(0, 0, 0, 0); return d; })() : null;
+  const dateTo = $("fDateTo").value ? (() => { const d = new Date($("fDateTo").value); d.setHours(23, 59, 59, 999); return d; })() : null;
 
   const base = st === "check" ? checkQueue() : ROWS;
   const rows = base.filter(r => {
@@ -218,14 +218,8 @@ function render() {
 
     // Date filtering: check if recording date falls within the selected range
     const recTime = new Date((r.started_at || r.uploaded_at) * 1000);
-    if (dateFrom) {
-      dateFrom.setHours(0, 0, 0, 0);
-      if (recTime < dateFrom) return false;
-    }
-    if (dateTo) {
-      dateTo.setHours(23, 59, 59, 999);
-      if (recTime > dateTo) return false;
-    }
+    if (dateFrom && recTime < dateFrom) return false;
+    if (dateTo && recTime > dateTo) return false;
     return true;
   });
   $("rows").innerHTML = rows.length ? rows.map(r => `<tr class="clickable" onclick="openRec(${r.id})">
