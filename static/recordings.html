@@ -155,27 +155,32 @@ const who = r => r.csp_name ? esc(r.csp_name) : r.other_number ? esc(r.other_num
 const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 (async () => {
-  await loadConfig();
-  const me = await loadMe();
-  STAFF = me.role === "admin" || me.role === "ops";
-  RMS = await api("api/rms");
-  $("nav").innerHTML = navHtml("recordings") + `<div class="right"><span class="small muted" id="updated"></span></div>`;
-  $("fCat").innerHTML += Object.entries(CONFIG.categories).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("")
-    + `<option value="unknown">No issue / unknown</option>`;
-  if (STAFF) {
-    $("uploadPanel").hidden = false;
-    $("fRm").hidden = false;
-    const opts = RMS.map(r => `<option value="${r.id}">${esc(r.name)} · ${esc(r.region)}</option>`).join("");
-    $("uRm").innerHTML = opts + `<option value="0">No RM (not an RM call)</option>`;
-    $("fRm").innerHTML += opts;
+  try {
+    await loadConfig();
+    const me = await loadMe();
+    STAFF = me.role === "admin" || me.role === "ops";
+    RMS = await api("api/rms");
+    $("nav").innerHTML = navHtml("recordings") + `<div class="right"><span class="small muted" id="updated"></span></div>`;
+    $("fCat").innerHTML += Object.entries(CONFIG.categories).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("")
+      + `<option value="unknown">No issue / unknown</option>`;
+    if (STAFF) {
+      $("uploadPanel").hidden = false;
+      $("fRm").hidden = false;
+      const opts = RMS.map(r => `<option value="${r.id}">${esc(r.name)} · ${esc(r.region)}</option>`).join("");
+      $("uRm").innerHTML = opts + `<option value="0">No RM (not an RM call)</option>`;
+      $("fRm").innerHTML += opts;
+    }
+    ["fStatus", "fCat", "fRm", "fDateFrom", "fDateTo"].forEach(id => $(id).onchange = render);
+    $("fSearch").oninput = render;
+    $("drawerBg").onclick = closeDrawer;
+    $("uploadForm").onsubmit = upload;
+    await refresh();
+    const id = Number(location.hash.slice(1));
+    if (id) openRec(id);
+  } catch (e) {
+    console.error("Recordings page init failed:", e);
+    toast("Error loading page: " + (e.message || String(e)));
   }
-  ["fStatus", "fCat", "fRm", "fDateFrom", "fDateTo"].forEach(id => $(id).onchange = render);
-  $("fSearch").oninput = render;
-  $("drawerBg").onclick = closeDrawer;
-  $("uploadForm").onsubmit = upload;
-  await refresh();
-  const id = Number(location.hash.slice(1));
-  if (id) openRec(id);
 })();
 
 async function refresh() {
