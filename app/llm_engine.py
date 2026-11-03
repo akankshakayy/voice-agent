@@ -348,7 +348,8 @@ def provider() -> str | None:
         return want if os.environ.get(keys[want]) else None
     # auto: try claude-code first (no key needed), then others with keys
     if want == "auto":
-        return next(("claude-code", *(p for p, env in keys.items() if os.environ.get(env))), None)
+        providers = ["claude-code"] + [p for p, env in keys.items() if os.environ.get(env)]
+        return next(iter(providers), None)
     return None
 
 
