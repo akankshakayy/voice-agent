@@ -1166,7 +1166,8 @@ def list_recordings(request: Request, status: str | None = None, rm_id: int | No
     if u.get("role") == "rm":
         rm_id = u["rm_id"]  # RMs always see only their own recordings
     # else: admin/ops see all if rm_id=None, or filtered if rm_id is specified
-    return {"counts": recordings.summary_counts(rm_id), "recordings": recordings.list_recordings(status, rm_id, limit)}
+    recs = recordings.list_recordings(status, rm_id, limit)
+    return {"counts": recordings.summary_counts(rm_id), "recordings": [recordings.add_transcription_accuracy(r) for r in recs]}
 
 
 def _own_recording(request: Request, rec_id: int) -> dict:
@@ -1204,7 +1205,8 @@ def block_misheard(body: MisheardBlockBody, actor=Depends(allow(*STAFF))):
 
 @app.get("/api/recordings/{rec_id}", dependencies=[Depends(allow("admin", "ops", "rm"))])
 def get_recording(rec_id: int, request: Request):
-    return _own_recording(request, rec_id)
+    r = _own_recording(request, rec_id)
+    return recordings.add_transcription_accuracy(r)
 
 
 @app.get("/api/recordings/{rec_id}/audio", dependencies=[Depends(allow("admin", "ops", "rm"))])
@@ -1262,8 +1264,8 @@ def download_recording(rec_id: int, kind: str, request: Request):
 
 
 class RecordingEditBody(BaseModel):
-    lines: list[dict] | None = None      # every line kept: {"i", "text", "speaker", "voice"}
-    summary: str | None = None
+    lines: list[dict] | None = None      # every line in order: {"i": index or null, "text", "speaker", "voice", "start", "end"}
+    summary: str | None = None           # auto-updated if transcript changes
     report_md: str | None = None
     intent: str | None = None
     slots: dict | None = None            # every detail to keep: {"amount": "5000", ...}

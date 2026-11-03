@@ -39,6 +39,13 @@ from zoneinfo import ZoneInfo
 from . import db, diarize, integrations, llm_engine, misheard, report, sarvam, stt, telemetry
 from .taxonomy import CATEGORIES, SLOT_LABELS
 
+# Try to use Claude for STT, fallback to Groq
+try:
+    from . import claude_stt
+    STT_ENGINE = claude_stt  # Claude CLI with Groq fallback
+except ImportError:
+    STT_ENGINE = stt  # Fallback to pure Groq
+
 log = logging.getLogger("eko.recordings")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAX_BYTES = 100 * 1024 * 1024
@@ -237,14 +244,32 @@ def transcript_version(r: dict) -> float | None:
     return r.get("transcript_edited_at") or r.get("processed_at")
 
 
+def transcription_accuracy(r: dict) -> float | None:
+    """Calculate transcription accuracy as (1 - WER) * 100 if checked, else None."""
+    if not r.get("checked_at"):  # Only for manually checked transcripts
+        return None
+    words = r.get("stt_words")
+    errors = r.get("stt_errors")
+    if not words or errors is None:
+        return None
+    accuracy = max(0, (1 - (errors / words)) * 100) if words > 0 else None
+    return round(accuracy, 1) if accuracy is not None else None
+
+
+def add_transcription_accuracy(recording: dict) -> dict:
+    """Add transcription_accuracy field to recording dict."""
+    recording["transcription_accuracy"] = transcription_accuracy(recording)
+    return recording
+
+
 def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary: str | None = None,
                report_md: str | None = None, intent: str | None = None, slots: dict | None = None,
                checked=(), based_on: float | None = None) -> dict:
     """A person fixes what speech-to-text or the LLM got wrong.
 
-    lines: every line to keep, in order, as {"i": its index in the transcript now, "text", "speaker", "voice"}.
-    A line left out is removed (e.g. Whisper made it up from silence) and kept in removed_json; times stay as they
-    were. A line whose text changes keeps the machine's first version in "heard", so a corrected line pairs what
+    lines: every line in the transcript, in order, as {"i": original index or null for new lines, "text", "speaker",
+           "voice", "start", "end"}. New lines have "i": null. Lines can be reordered, edited, or removed.
+    A line whose text changes keeps the machine's first version in "heard", so a corrected line pairs what
     was heard with what was said: a scorecard reference (export_candidates) and a misheard-word example
     (app/misheard.py). intent and slots fix the issue type and details; the machine's are kept in agent_*.
     Every change is logged in corrections (source 'recording'). Fixed text is masked again, so a personal number
@@ -272,35 +297,76 @@ def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary
             raise ValueError("Someone else saved changes to this transcript while you were editing. "
                              "Open it again and redo your corrections")
         old = transcript
-        idx = [l.get("i") for l in lines]
-        if any(not isinstance(i, int) or not 0 <= i < len(old) for i in idx) or idx != sorted(set(idx)):
-            raise ValueError("The transcript changed while you were editing it. Open it again")
         new = []
-        for l in lines:
-            o = old[l["i"]]
+        used_indices = set()
+
+        for new_idx, l in enumerate(lines):
+            orig_idx = l.get("i")
             text = mask(" ".join(str(l.get("text") or "").split()))
+
             if not text:
-                raise ValueError(f"Line at {o['start']:.0f}s is empty: remove it instead")
-            line = {**o, "text": text}
-            if l.get("speaker") in SPEAKERS:
-                line["speaker"] = l["speaker"]
-            if o.get("voice") and re.fullmatch(r"[A-Z]", str(l.get("voice") or "")):
-                line["voice"] = l["voice"]
-            if text != o["text"]:
-                line.setdefault("heard", o["text"])
-                line["fixed_by"] = actor          # misheard.py counts people, not just calls
-                log_.append(("transcript", o["text"], text))
-            if line.get("speaker") != o.get("speaker") or line.get("voice") != o.get("voice"):
-                log_.append(("speaker", f"{o.get('voice') or ''} {o.get('speaker')}".strip(),
-                             f"{line.get('voice') or ''} {line.get('speaker')}".strip()))
+                raise ValueError(f"Line {new_idx} is empty: remove it instead")
+
+            # Handle existing line (orig_idx is not None)
+            if orig_idx is not None:
+                if not isinstance(orig_idx, int) or not 0 <= orig_idx < len(old):
+                    raise ValueError(f"Line index {orig_idx} is out of bounds")
+                if orig_idx in used_indices:
+                    raise ValueError(f"Line {orig_idx} appears multiple times")
+                used_indices.add(orig_idx)
+                o = old[orig_idx]
+                line = {**o, "text": text}
+
+                # Allow editing timestamps
+                if "start" in l and isinstance(l["start"], (int, float)):
+                    line["start"] = round(float(l["start"]), 2)
+                if "end" in l and isinstance(l["end"], (int, float)):
+                    line["end"] = round(float(l["end"]), 2)
+
+                if l.get("speaker") in SPEAKERS:
+                    line["speaker"] = l["speaker"]
+                if o.get("voice") and re.fullmatch(r"[A-Z]", str(l.get("voice") or "")):
+                    line["voice"] = l["voice"]
+                if text != o["text"]:
+                    line.setdefault("heard", o["text"])
+                    line["fixed_by"] = actor
+                    log_.append(("transcript", o["text"], text))
+                if line.get("speaker") != o.get("speaker") or line.get("voice") != o.get("voice"):
+                    log_.append(("speaker", f"{o.get('voice') or ''} {o.get('speaker')}".strip(),
+                                 f"{line.get('voice') or ''} {line.get('speaker')}".strip()))
+                if line.get("start") != o.get("start") or line.get("end") != o.get("end"):
+                    log_.append(("timing", f"{o.get('start')}-{o.get('end')}",
+                                f"{line.get('start')}-{line.get('end')}"))
+            else:
+                # New line (i is None)
+                if "start" not in l or "end" not in l:
+                    raise ValueError(f"New line {new_idx} must have 'start' and 'end' timestamps")
+                start, end = float(l["start"]), float(l["end"])
+                if start >= end:
+                    raise ValueError(f"Line {new_idx}: start time must be before end time")
+
+                line = {
+                    "text": text,
+                    "start": round(start, 2),
+                    "end": round(end, 2),
+                    "speaker": l.get("speaker") if l.get("speaker") in SPEAKERS else "rm",
+                }
+                if "voice" in l and re.fullmatch(r"[A-Z]", str(l["voice"] or "")):
+                    line["voice"] = l["voice"]
+                line["fixed_by"] = actor
+                log_.append(("transcript", "", text))
+
             new.append(line)
-        gone = [old[i] for i in sorted(set(range(len(old))) - set(idx))]
+
+        # Mark removed lines
+        gone = [old[i] for i in sorted(set(range(len(old))) - used_indices)]
         log_ += [("transcript", l["text"], "") for l in gone]
+
         if new != old:
             issue = r["issue_segment"]
             transcript, removed = new, removed + gone
             fields.update(transcript_json=new, transcript_edited_at=now,
-                          issue_segment=idx.index(issue) if issue is not None and issue in idx else -1)
+                          issue_segment=None if issue is None else (issue if issue < len(new) else -1))
             if gone:
                 fields["removed_json"] = removed
         checked.add("transcript")
@@ -344,6 +410,8 @@ def save_edits(rec_id: int, actor: str, lines: list[dict] | None = None, summary
         telemetry.record_correction("recording", rec_id, field, before, after, actor)
     if "transcript_json" in fields:
         misheard.forget()
+        # Auto-regenerate summary when transcript is edited
+        threading.Thread(target=_write_summary, args=(rec_id,), daemon=True, name=f"auto-summary-{rec_id}").start()
     return {"changed": len(log_)}
 
 
@@ -610,7 +678,7 @@ def _transcribe(r: dict, path: str) -> dict:
     t0 = time.perf_counter()
     audio, name = _compact(path)
     try:
-        segs, words = stt.transcribe_detailed(audio, name, LANG, STT_MODEL, words=want_words, prompt=STT_PROMPT)
+        segs, words = STT_ENGINE.transcribe_detailed(audio, name, LANG, STT_MODEL, words=want_words, prompt=STT_PROMPT)
     except Exception as e:
         if _is_rate_limit(e):
             raise RateLimited("Whisper rate limit", 300) from e
