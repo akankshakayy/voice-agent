@@ -104,6 +104,10 @@
 
   <section class="panel" style="--tone:var(--c5)">
     <h2>Recorded calls</h2>
+    <div style="display: flex; gap: 10px; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+      <button id="tabRM" class="tab-btn active" onclick="setCallType('rm')" style="background: none; border: none; color: var(--text); padding: 8px 12px; cursor: pointer; border-bottom: 3px solid transparent; font-weight: 500;">RM Calls <span id="rmCount" class="small muted">(0)</span></button>
+      <button id="tabDC" class="tab-btn" onclick="setCallType('dc')" style="background: none; border: none; color: var(--muted); padding: 8px 12px; cursor: pointer; border-bottom: 3px solid transparent;">DC Calls <span id="dcCount" class="small muted">(0)</span></button>
+    </div>
     <div class="filters">
       <select id="fStatus"><option value="">All statuses</option><option value="check">To check: least sure first</option><option value="done">Processed</option><option value="new">Waiting</option><option value="failed">Failed</option></select>
       <select id="fCat"><option value="">All issue types</option></select>
@@ -144,7 +148,8 @@ function whoLabel(l, r) {
   if (n) return `Speaker ${n}${role ? `<small>${role}</small>` : ""}`;
   return SPEAKER[l.speaker] || "?";
 }
-let ROWS = [], RMS = [], OPEN = null, STAFF = false, EDITING = false;
+let ROWS = [], RMS = [], OPEN = null, STAFF = false, EDITING = false, CALL_TYPE = 'rm';
+let ALL_ROWS = [];  // Keep unfiltered rows for counting
 
 // The calls to check: processed CSP calls nobody has checked, the ones the machine was least sure of first
 const needsCheck = r => r.status === "done" && r.has_transcript && !r.checked_at && r.is_csp_call !== 0;
@@ -185,7 +190,15 @@ const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
 
 async function refresh() {
   const data = await api("api/recordings?limit=1000");
-  ROWS = data.recordings;
+  ALL_ROWS = data.recordings;
+  ROWS = ALL_ROWS.filter(r => r.call_type === CALL_TYPE || (r.call_type === null && CALL_TYPE === 'rm'));
+
+  // Count by call type
+  const rmCount = ALL_ROWS.filter(r => r.call_type !== 'dc').length;
+  const dcCount = ALL_ROWS.filter(r => r.call_type === 'dc').length;
+  $("rmCount").textContent = `(${rmCount})`;
+  $("dcCount").textContent = `(${dcCount})`;
+
   const c = data.counts, done = ROWS.filter(r => r.status === "done");
   const secs = ROWS.reduce((a, r) => a + (r.duration_sec || 0), 0);
   $("kpis").innerHTML = [
@@ -207,6 +220,16 @@ async function refresh() {
   clearTimeout(refresh.t);
   const writing = OPEN && OPEN.status === "done" && !OPEN.report_md && !OPEN.report_error;
   refresh.t = setTimeout(refresh, (c.new || writing ? 8 : 30) * 1000);
+}
+
+function setCallType(type) {
+  CALL_TYPE = type;
+  $("tabRM").style.color = type === 'rm' ? 'var(--text)' : 'var(--muted)';
+  $("tabRM").style.borderBottom = type === 'rm' ? '3px solid var(--c1)' : 'none';
+  $("tabDC").style.color = type === 'dc' ? 'var(--text)' : 'var(--muted)';
+  $("tabDC").style.borderBottom = type === 'dc' ? '3px solid var(--c1)' : 'none';
+  ROWS = ALL_ROWS.filter(r => r.call_type === CALL_TYPE || (r.call_type === null && CALL_TYPE === 'rm'));
+  render();
 }
 
 function render() {

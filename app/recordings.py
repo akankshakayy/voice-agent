@@ -707,6 +707,14 @@ def process_one(r: dict):
     started, t0 = time.time(), time.perf_counter()
     path = os.path.join(storage_dir(), r["file_path"])
 
+    # Skip transcription for DC calls - just mark as done
+    if r.get("call_type") == "dc":
+        db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
+                  summary="DC call - no transcription", transcript_json=[], is_csp_call=0)
+        integrations.recording_processed(r["id"])
+        log.info(f"DC call {r['id']} marked done (no transcription)")
+        return
+
     # Skip if duration < 2 seconds (too short)
     if r.get("duration_sec") and r["duration_sec"] < 2:
         db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
@@ -875,7 +883,7 @@ LIST_COLS = """r.id, r.rm_id, m.name AS rm_name, r.csp_id, c.name AS csp_name, c
                CASE WHEN r.token_id IS NULL THEN 'manual' ELSE 'phone' END AS source"""
 
 
-def list_recordings(status: str | None = None, rm_id: int | None = None, limit: int = 200) -> list[dict]:
+def list_recordings(status: str | None = None, rm_id: int | None = None, limit: int = 200, call_type: str | None = None) -> list[dict]:
     where, args = [], []
     if status:
         where.append("r.status=?")
@@ -883,6 +891,9 @@ def list_recordings(status: str | None = None, rm_id: int | None = None, limit: 
     if rm_id:
         where.append("r.rm_id=?")
         args.append(rm_id)
+    if call_type:
+        where.append("r.call_type=?")
+        args.append(call_type)
     sql = (f"SELECT {LIST_COLS} FROM recordings r LEFT JOIN rms m ON m.id=r.rm_id LEFT JOIN csps c ON c.id=r.csp_id"
            + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY r.started_at DESC, r.id DESC LIMIT ?")
     return db.q(sql, (*args, max(1, min(limit, 1000))))

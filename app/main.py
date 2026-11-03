@@ -1159,14 +1159,14 @@ def revoke_upload_token(token_id: int):
 
 
 @app.get("/api/recordings", dependencies=[Depends(allow("admin", "ops", "rm"))])
-def list_recordings(request: Request, status: str | None = None, rm_id: int | None = None, limit: int = 500):
+def list_recordings(request: Request, status: str | None = None, rm_id: int | None = None, limit: int = 500, call_type: str | None = None):
     u = request.state.user
     # Admin/Ops: can view all recordings, or filter to specific RM if requested
     # RM: can only view their own recordings (rm_id forced to their own)
     if u.get("role") == "rm":
         rm_id = u["rm_id"]  # RMs always see only their own recordings
     # else: admin/ops see all if rm_id=None, or filtered if rm_id is specified
-    recs = recordings.list_recordings(status, rm_id, limit)
+    recs = recordings.list_recordings(status, rm_id, limit, call_type)
     return {"counts": recordings.summary_counts(rm_id), "recordings": [recordings.add_transcription_accuracy(r) for r in recs]}
 
 

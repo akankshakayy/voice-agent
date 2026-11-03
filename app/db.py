@@ -306,7 +306,8 @@ def conn() -> sqlite3.Connection:
                                            "checked_at": "REAL", "checked_by": "TEXT",
                                            "stt_errors": "INTEGER", "stt_words": "INTEGER",
                                            "issue_checked_at": "REAL", "issue_checked_by": "TEXT",
-                                           "stt_confidence": "REAL"})    # Whisper's own certainty, 0-1
+                                           "stt_confidence": "REAL",     # Whisper's own certainty, 0-1
+                                           "call_type": "TEXT DEFAULT 'rm'"})  # 'rm' (RM-CSP) or 'dc' (DC-official)
         if "agent_summary" not in {r[1] for r in _conn.execute("PRAGMA table_info(tickets)")}:
             # The agent's own version of a ticket, kept when an RM edits it (correction delta, acceptance rate)
             _add_columns(_conn, "tickets", {"agent_summary": "TEXT", "agent_details_json": "TEXT",
