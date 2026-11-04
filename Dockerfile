@@ -7,10 +7,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Create non-root user matching eko-deploy's enforced user
 RUN useradd -m -u 10001 appuser && \
-    mkdir -p /data && \
+    mkdir -p /data/logs && \
     ln -s /data /app/data && \
     chown -R 10001:10001 /app /data && \
-    chmod -R 755 /data
+    chmod -R 777 /data
 
 USER 10001
 
