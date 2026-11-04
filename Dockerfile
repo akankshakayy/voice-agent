@@ -5,7 +5,7 @@ COPY . /app/
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create non-root user matching eko-deploy's enforced user
+# Create non-root user and data directories
 RUN useradd -m -u 10001 appuser && \
     mkdir -p /app/data/logs && \
     chown -R 10001:10001 /app && \
@@ -16,4 +16,8 @@ USER 10001
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Startup script: restore database from mounted volume if available, then run app
+RUN echo '#!/bin/bash\nset -e\nif [ -f /data/eko_agent.db ]; then\n  cp /data/eko_agent.db /app/data/\nfi\nexec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "*"' > /app/start.sh && \
+    chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]
