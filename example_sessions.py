@@ -233,7 +233,10 @@ async def setup_tasks():
 
     for title, desc, priority in tasks:
         task = client.create_task(title, desc, priority)
-        print(f"  ✓ Created: {title}")
+        if task:
+            print(f"  ✓ Created: {title} (ID: {task.get('task_id', 'unknown')})")
+        else:
+            print(f"  ✗ Failed to create: {title}")
 
     print(f"\n✅ {len(tasks)} tasks created!\n")
 
@@ -254,7 +257,17 @@ async def main():
     print("⏳ Setting up tasks...")
     await setup_tasks()
 
-    print("\n🚀 Starting 3 parallel sessions...\n")
+    # Verify tasks were created
+    import sys
+    sys.stdout.flush()
+    await asyncio.sleep(1)  # Give server time to process
+
+    client_check = OrchestratorClient()
+    pending = client_check.get_tasks(status="pending")
+    print(f"\n✅ Verified {len(pending)} pending tasks in database\n")
+    sys.stdout.flush()
+
+    print("🚀 Starting 3 parallel sessions...\n")
     print("=" * 60)
 
     # Run all sessions in parallel

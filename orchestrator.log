@@ -1,0 +1,19 @@
+INFO:     Started server process [892209]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 8000): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+
+    ╔═══════════════════════════════════════════════════════════╗
+    ║   Multi-Session Orchestrator Server                       ║
+    ║   Coordinating Claude Code parallel development           ║
+    ╚═══════════════════════════════════════════════════════════╝
+
+    WebSocket: ws://localhost:8000/ws/{session_name}
+    REST API:  http://localhost:8000
+    Status:    http://localhost:8000/status
+    Health:    http://localhost:8000/health
+
+    Starting server...
+    

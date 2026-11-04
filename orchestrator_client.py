@@ -124,17 +124,24 @@ class OrchestratorClient:
     async def request_task(self):
         """Request next task from orchestrator"""
         try:
-            response = requests.post(
-                f"{self.rest_url}/tasks",
-                json={"status": "pending"}
-            )
+            url = f"{self.rest_url}/tasks?status=pending"
+            logger.debug(f"Requesting task from: {url}")
+            response = requests.get(url, timeout=5)
+            logger.debug(f"Response status: {response.status_code}")
             if response.status_code == 200:
-                task = response.json()
-                self.current_task = task
-                logger.info(f"📋 Requested task: {task.get('title')}")
-                return task
+                tasks = response.json()
+                logger.debug(f"Got {len(tasks)} pending tasks")
+                if tasks:
+                    task = tasks[0]  # Get first (highest priority) pending task
+                    self.current_task = task
+                    logger.info(f"📋 Requested task: {task.get('title')}")
+                    return task
+                else:
+                    logger.info("No pending tasks available")
+            else:
+                logger.error(f"Unexpected status code: {response.status_code} - {response.text}")
         except Exception as e:
-            logger.error(f"Failed to request task: {e}")
+            logger.error(f"Failed to request task: {e}", exc_info=True)
         return None
 
     async def complete_task(self, task_id: str, result: str = ""):
@@ -213,19 +220,27 @@ class OrchestratorClient:
     def create_task(self, title: str, description: str, priority: int = 1) -> dict:
         """Create a new task"""
         try:
+            url = f"{self.rest_url}/tasks"
+            logger.debug(f"Creating task at {url}: {title}")
             response = requests.post(
-                f"{self.rest_url}/tasks",
+                url,
                 json={
                     "title": title,
                     "description": description,
                     "priority": priority,
                     "status": "pending"
-                }
+                },
+                timeout=5
             )
+            logger.debug(f"Response: {response.status_code}")
             if response.status_code == 200:
-                return response.json()
+                result = response.json()
+                logger.info(f"✓ Task created: {title}")
+                return result
+            else:
+                logger.error(f"Failed: status {response.status_code} - {response.text}")
         except Exception as e:
-            logger.error(f"Failed to create task: {e}")
+            logger.error(f"Failed to create task: {e}", exc_info=True)
         return {}
 
 # ============================================================================

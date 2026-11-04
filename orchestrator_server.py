@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 class Task(BaseModel):
-    id: str
+    id: str = None  # Auto-generated if not provided
     title: str
     description: str
-    status: str  # pending | in_progress | completed | blocked
+    status: str = "pending"  # pending | in_progress | completed | blocked
     assigned_to: str = None  # Session ID
     priority: int = 1
     dependencies: List[str] = []
@@ -377,7 +377,12 @@ async def websocket_endpoint(websocket: WebSocket, session_name: str):
     """WebSocket endpoint for Claude Code sessions"""
     session_id = str(uuid.uuid4())
 
-    await websocket.accept()
+    try:
+        await websocket.accept()
+        logger.info(f"✓ WebSocket accepted for session: {session_name}")
+    except Exception as e:
+        logger.error(f"✗ WebSocket accept failed: {e}")
+        raise
 
     # Register session
     await orchestrator.register_session(session_id, session_name, websocket)
