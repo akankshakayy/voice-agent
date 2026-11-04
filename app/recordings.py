@@ -877,7 +877,7 @@ def processing_loop(stop: threading.Event):
 LIST_COLS = """r.id, r.rm_id, m.name AS rm_name, r.csp_id, c.name AS csp_name, c.csp_code, r.other_number, r.started_at,
                r.duration_sec, r.direction, r.uploaded_at, r.status, r.error, r.attempts, r.is_csp_call, r.language,
                r.intent, r.sentiment, r.resolution, r.summary, r.orig_name, r.intent_confidence, r.stt_confidence,
-               r.checked_at, r.issue_checked_at, r.stt_words,
+               r.checked_at, r.issue_checked_at, r.stt_words, r.call_type,
                CASE WHEN r.transcript_json IS NOT NULL AND r.transcript_json NOT IN ('', '[]') THEN 1 ELSE 0 END AS has_transcript,
                CASE WHEN r.stt_words > 0 THEN ROUND(1.0 * r.stt_errors / r.stt_words, 4) END AS stt_wer,
                CASE WHEN r.token_id IS NULL THEN 'manual' ELSE 'phone' END AS source"""
