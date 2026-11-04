@@ -251,6 +251,8 @@ def conn() -> sqlite3.Connection:
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")
+        _conn.execute("PRAGMA synchronous=FULL")
+        _conn.execute("PRAGMA wal_autocheckpoint=1000")
         _conn.executescript(SCHEMA)
         # Migrations for databases created by older versions
         if "lang" not in {r[1] for r in _conn.execute("PRAGMA table_info(calls)")}:
@@ -341,6 +343,7 @@ def _add_columns(c: sqlite3.Connection, table: str, cols: dict, demo_source: boo
             if name == "source" and demo_source:
                 c.execute(f"UPDATE {table} SET source='demo'")   # everything before the import was demo data
     c.commit()
+    c.execute("PRAGMA wal_checkpoint(RESTART)")
 
 
 def reset_connection(path: str | None = None):
@@ -364,6 +367,7 @@ def x(sql: str, args=()) -> int:
     with _lock:
         cur = conn().execute(sql, args)
         conn().commit()
+        conn().execute("PRAGMA wal_checkpoint(RESTART)")
         return cur.lastrowid
 
 
