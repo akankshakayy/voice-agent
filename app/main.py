@@ -315,6 +315,7 @@ def login(body: LoginBody, request: Request):
 
 
 @app.get("/healthz")
+@app.get("/status")
 def healthz():
     """For the deploy platform's health check: the app is up and its database answers. No login, no data."""
     db.q("SELECT 1")
