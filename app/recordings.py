@@ -896,7 +896,19 @@ def list_recordings(status: str | None = None, rm_id: int | None = None, limit: 
         args.append(call_type)
     sql = (f"SELECT {LIST_COLS} FROM recordings r LEFT JOIN rms m ON m.id=r.rm_id LEFT JOIN csps c ON c.id=r.csp_id"
            + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY r.started_at DESC, r.id DESC LIMIT ?")
-    return db.q(sql, (*args, max(1, min(limit, 1000))))
+
+    # Debug logging
+    limit_val = max(1, min(limit, 1000))
+    log.debug(f"list_recordings: status={status}, rm_id={rm_id}, call_type={call_type}, limit={limit_val}")
+    log.debug(f"  SQL: {sql}")
+    log.debug(f"  Args: {args + [limit_val]}")
+
+    result = db.q(sql, (*args, limit_val))
+    log.debug(f"  Returned {len(result)} recordings")
+    if result and len(result) > 0:
+        log.debug(f"  First result keys: {list(result[0].keys())}")
+
+    return result
 
 
 def get_recording(rec_id: int) -> dict | None:

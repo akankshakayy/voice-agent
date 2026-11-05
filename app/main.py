@@ -1167,8 +1167,26 @@ def list_recordings(request: Request, status: str | None = None, rm_id: int | No
     if u.get("role") == "rm":
         rm_id = u["rm_id"]  # RMs always see only their own recordings
     # else: admin/ops see all if rm_id=None, or filtered if rm_id is specified
-    recs = recordings.list_recordings(status, rm_id, limit, call_type)
-    return {"counts": recordings.summary_counts(rm_id), "recordings": [recordings.add_transcription_accuracy(r) for r in recs]}
+
+    # Log the API call for debugging data issues
+    log.info(f"API: /api/recordings - user={u.get('email')}, status={status}, rm_id={rm_id}, limit={limit}, call_type={call_type}")
+
+    try:
+        counts = recordings.summary_counts(rm_id)
+        log.debug(f"  Counts: {counts}")
+
+        recs = recordings.list_recordings(status, rm_id, limit, call_type)
+        log.info(f"  Returned {len(recs)} recordings (expected by counts: {sum(counts.values())})")
+
+        if sum(counts.values()) > 0 and len(recs) == 0:
+            log.error(f"⚠️  DATA MISMATCH: Database shows {sum(counts.values())} recordings but list_recordings returned 0!")
+            log.error(f"    This may indicate: missing files, database sync issues, or JOIN failures")
+
+        result = [recordings.add_transcription_accuracy(r) for r in recs]
+        return {"counts": counts, "recordings": result}
+    except Exception as e:
+        log.error(f"  ERROR: {e}", exc_info=True)
+        raise
 
 
 def _own_recording(request: Request, rec_id: int) -> dict:
