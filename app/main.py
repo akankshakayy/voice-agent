@@ -81,6 +81,7 @@ seed_if_demo()
 
 # ------------------------------------------------------------------ auth
 PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/favicon.ico", "/api/auth/login",
+                 "/status", "/healthz", "/health", "/api/health", "/ping",  # Health check endpoints - no auth required
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
                 "/api/recordings/cleanup"}
