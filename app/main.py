@@ -315,11 +315,12 @@ def login(body: LoginBody, request: Request):
 
 
 @app.get("/healthz")
-@app.get("/status")
-def healthz():
+@app.get("/status", tags=["health"])
+def healthz(request: Request):
     """For the deploy platform's health check: the app is up and its database answers. No login, no data."""
+    # Bypass auth for health check
     db.q("SELECT 1")
-    return {"ok": True}
+    return {"ok": True, "status": "healthy"}
 
 
 @app.get("/api/auth/options")
