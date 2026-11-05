@@ -59,52 +59,57 @@ def sync_from_server() -> bool:
         backup_path = backup_local_db()
         print(f"   ✓ Backed up local to: {backup_path}")
 
-    # Download from server using SCP
+    # Download from server using SFTP (paramiko)
     try:
-        cmd = [
-            "scp",
-            "-P", str(SERVER_PORT),
-            f"{SERVER_USER}@{SERVER_HOST}:{SERVER_DB}",
-            str(LOCAL_DB)
-        ]
+        import paramiko
+        import re
 
-        # Set up password auth via SSH_ASKPASS
-        env = os.environ.copy()
+        # Get credentials from .env
+        env_path = LOCAL_DB.parent.parent / ".env"
+        credentials = {}
+        if env_path.exists():
+            with open(env_path) as f:
+                content = f.read()
+                match = re.search(r'Username=(.+)', content)
+                if match:
+                    credentials['username'] = match.group(1).strip()
+                match = re.search(r'Password=(.+)', content)
+                if match:
+                    credentials['password'] = match.group(1).strip()
 
-        # Create temp script for password
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-            # Read password from .env if available
-            env_path = LOCAL_DB.parent.parent / ".env"
-            if env_path.exists():
-                with open(env_path) as ef:
-                    for line in ef:
-                        if line.startswith("Password="):
-                            password = line.split("=", 1)[1].strip()
-                            f.write(f"#!/bin/bash\necho '{password}'\n")
-                            break
-            f.flush()
-            os.chmod(f.name, 0o700)
-
-            # Try SCP with password
-            env['SSH_ASKPASS'] = f.name
-            env['SSH_ASKPASS_REQUIRE'] = 'force'
-            env['DISPLAY'] = ':0'  # Required for SSH_ASKPASS
-
-            result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30)
-            os.unlink(f.name)
-
-        if result.returncode != 0:
-            print(f"   ✗ SCP failed: {result.stderr}")
+        if 'username' not in credentials or 'password' not in credentials:
+            print(f"   ✗ Could not find credentials in .env")
             return False
+
+        # Connect via SSH
+        print(f"   Connecting to {SERVER_HOST}...")
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
+            SERVER_HOST,
+            port=SERVER_PORT,
+            username=credentials['username'],
+            password=credentials['password'],
+            timeout=10
+        )
+
+        # Download via SFTP
+        print(f"   Downloading database...")
+        sftp = client.open_sftp()
+        sftp.get(SERVER_DB, str(LOCAL_DB))
+        sftp.close()
 
         # Verify the download
         local_info = get_db_info(str(LOCAL_DB))
         print(f"   ✓ Downloaded successfully")
         print(f"   ✓ Local DB now has {local_info.get('recordings', 0)} recordings")
+        print(f"   ✓ Database size: {local_info.get('size_mb', 0)} MB")
+
+        client.close()
         return True
 
-    except subprocess.TimeoutExpired:
-        print(f"   ✗ SCP timeout")
+    except ImportError:
+        print(f"   ✗ paramiko not available (install with: pip install paramiko)")
         return False
     except Exception as e:
         print(f"   ✗ Error: {e}")
