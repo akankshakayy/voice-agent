@@ -36,6 +36,37 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("rm_locked", false)
         set(v) = prefs.edit().putBoolean("rm_locked", v).apply()
 
+    /** Uploader mode: 'rm' | 'dc' | 'employee' */
+    var mode: String
+        get() = prefs.getString("mode", "rm") ?: "rm"
+        set(v) = prefs.edit().putString("mode", v).apply()
+
+    /** DC ID (for DC mode) */
+    var dcId: Int
+        get() = prefs.getInt("dc_id", -1)
+        set(v) = prefs.edit().putInt("dc_id", v).apply()
+    var dcName: String
+        get() = prefs.getString("dc_name", "") ?: ""
+        set(v) = prefs.edit().putString("dc_name", v).apply()
+
+    /** Employee ID (for Employee mode) */
+    var employeeId: Int
+        get() = prefs.getInt("employee_id", -1)
+        set(v) = prefs.edit().putInt("employee_id", v).apply()
+    var employeeName: String
+        get() = prefs.getString("employee_name", "") ?: ""
+        set(v) = prefs.edit().putString("employee_name", v).apply()
+
+    /** DC mode: one-time consent token (encrypted) */
+    var consentToken: String
+        get() = secure.getString("consent_token", "") ?: ""
+        set(v) = secure.edit().putString("consent_token", v).apply()
+
+    /** DC mode: allowed phone numbers for upload (cached from server) */
+    var allowedNumbers: Set<String>
+        get() = prefs.getStringSet("allowed_numbers", emptySet()) ?: emptySet()
+        set(v) = prefs.edit().putStringSet("allowed_numbers", v).apply()
+
     /** Subscription id of the Eko SIM, plus every other id the call log may use for it (see Matcher.isEkoSim). */
     var ekoSubId: Int
         get() = prefs.getInt("eko_sub_id", -1)

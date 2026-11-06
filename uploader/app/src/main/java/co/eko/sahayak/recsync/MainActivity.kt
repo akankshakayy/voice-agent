@@ -33,6 +33,10 @@ class MainActivity : Activity() {
     private val simSpinner by lazy { findViewById<Spinner>(R.id.sim) }
     private val rmSpinner by lazy { findViewById<Spinner>(R.id.rm) }
     private val rmHint by lazy { findViewById<TextView>(R.id.rm_hint) }
+    private val modeSpinner by lazy { findViewById<Spinner>(R.id.mode) }
+    private val allowedNumbersView by lazy { findViewById<TextView>(R.id.allowed_numbers) }
+    private val consentCheckbox by lazy { findViewById<CheckBox>(R.id.consent) }
+    private val consentContainer by lazy { findViewById<android.widget.LinearLayout>(R.id.consent_container) }
     private val folder by lazy { findViewById<TextView>(R.id.folder) }
     private val wifiOnly by lazy { findViewById<CheckBox>(R.id.wifi_only) }
     private val status by lazy { findViewById<TextView>(R.id.status) }
@@ -104,12 +108,28 @@ class MainActivity : Activity() {
             try {
                 val p = Api(url, tok).ping()
                 runOnUiThread {
-                    if (p.locked) {
-                        showRms(listOf(p.rmId to p.rmName), true)
-                        testResult.text = "Connected. This phone's token belongs to ${p.rmName}."
-                    } else {
-                        showRms(p.rms, false)
-                        testResult.text = "Connected. Choose your name below."
+                    when (p.mode) {
+                        "rm" -> {
+                            if (p.locked) {
+                                showRms(listOf(p.rmId to p.rmName), true)
+                                testResult.text = "Connected. This phone's token belongs to ${p.rmName}."
+                            } else {
+                                showRms(p.rms, false)
+                                testResult.text = "Connected. Choose your name below."
+                            }
+                            showMode("rm", null, emptyList(), false)
+                        }
+                        "dc" -> {
+                            showRms(emptyList(), true)
+                            showMode("dc", p.dcName, p.allowedNumbers, p.consentRequired)
+                            testResult.text = "Connected. DC Mode: ${p.dcName}. Will fetch calls from allowed numbers."
+                        }
+                        "employee" -> {
+                            showRms(emptyList(), true)
+                            showMode("employee", p.employeeName, emptyList(), false)
+                            testResult.text = "Connected. Employee Mode: ${p.employeeName}. All recordings will be uploaded."
+                        }
+                        else -> testResult.text = "Unknown mode: ${p.mode}"
                     }
                 }
             } catch (e: Exception) {
@@ -129,24 +149,90 @@ class MainActivity : Activity() {
         s.rmLocked = locked
     }
 
+    /** Show mode-specific UI for DC or Employee modes. */
+    private fun showMode(mode: String, name: String?, allowedNumbers: List<String>, consentRequired: Boolean) {
+        s.mode = mode
+        when (mode) {
+            "rm" -> {
+                modeSpinner.visibility = android.view.View.GONE
+                allowedNumbersView.visibility = android.view.View.GONE
+                consentContainer.visibility = android.view.View.GONE
+            }
+            "dc" -> {
+                s.dcName = name ?: ""
+                s.allowedNumbers = allowedNumbers.toSet()
+                modeSpinner.visibility = android.view.View.VISIBLE
+                modeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+                    listOf("DC: $name"))
+                modeSpinner.isEnabled = false
+
+                allowedNumbersView.visibility = android.view.View.VISIBLE
+                allowedNumbersView.text = "Allowed numbers (${allowedNumbers.size}): ${allowedNumbers.joinToString(", ")}"
+
+                if (consentRequired) {
+                    consentContainer.visibility = android.view.View.VISIBLE
+                    consentCheckbox.isChecked = false
+                } else {
+                    consentContainer.visibility = android.view.View.GONE
+                }
+            }
+            "employee" -> {
+                s.employeeName = name ?: ""
+                modeSpinner.visibility = android.view.View.VISIBLE
+                modeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+                    listOf("Employee: $name"))
+                modeSpinner.isEnabled = false
+
+                allowedNumbersView.visibility = android.view.View.GONE
+                consentContainer.visibility = android.view.View.GONE
+            }
+        }
+    }
+
     private fun save() {
         val url = server.text.toString().trim().trimEnd('/')
         Matcher.serverUrlProblem(url)?.let { return toast(it) }
         if (token.text.isBlank()) return toast("Paste the upload token")
-        val rm = rms.getOrNull(rmSpinner.selectedItemPosition) ?: return toast("Tap Test connection, then choose your name")
         val sim = sims.getOrNull(simSpinner.selectedItemPosition) ?: return toast("Choose the Eko SIM")
         if (s.folderUri.isEmpty()) return toast("Choose the call recordings folder")
+
+        // Mode-specific validation
+        when (s.mode) {
+            "rm" -> {
+                val rm = rms.getOrNull(rmSpinner.selectedItemPosition) ?:
+                    return toast("Tap Test connection, then choose your name")
+                s.rmId = rm.first
+                s.rmName = rm.second
+            }
+            "dc" -> {
+                if (consentContainer.visibility == android.view.View.VISIBLE && !consentCheckbox.isChecked) {
+                    return toast("You must consent to share recordings for DC mode")
+                }
+                // Generate or retrieve consent token (in real implementation, get from server)
+                if (s.consentToken.isEmpty()) {
+                    s.consentToken = java.util.UUID.randomUUID().toString()
+                }
+            }
+            "employee" -> {
+                // No additional validation needed
+            }
+        }
+
         s.serverUrl = url
         s.token = token.text.toString()
-        s.rmId = rm.first
-        s.rmName = rm.second
         s.ekoSubId = sim.subId
         s.ekoSimLabel = sim.label
         s.ekoAccountIds = sim.accountIds
         s.wifiOnly = wifiOnly.isChecked
         UploadWorker.scheduleDaily(this)
         UploadWorker.watchCalls(this)
-        toast("Saved. Each Eko-SIM call is uploaded a few minutes after it ends, under ${rm.second}.")
+        val modeLabel = when (s.mode) {
+            "rm" -> s.rmName
+            "dc" -> "DC: ${s.dcName}"
+            "employee" -> "Employee: ${s.employeeName}"
+            else -> "Unknown"
+        }
+        toast("Saved. Each Eko-SIM call is uploaded a few minutes after it ends, under $modeLabel.")
         showStatus()
     }
 

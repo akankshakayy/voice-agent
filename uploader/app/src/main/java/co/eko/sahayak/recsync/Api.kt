@@ -31,8 +31,14 @@ class Api(private val serverUrl: String, private val token: String) {
         .connectTimeout(20, TimeUnit.SECONDS).writeTimeout(5, TimeUnit.MINUTES).readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    /** Whose phone this is. A personal token names one RM (locked); a shared token lists the RMs to choose from. */
-    data class Ping(val rmId: Int, val rmName: String, val locked: Boolean, val rms: List<Pair<Int, String>>)
+    /** Whose phone this is. Mode-aware response for RM/DC/Employee. */
+    data class Ping(
+        val mode: String,
+        val rmId: Int, val rmName: String, val locked: Boolean, val rms: List<Pair<Int, String>>,
+        val dcId: Int, val dcName: String,
+        val employeeId: Int, val employeeName: String,
+        val allowedNumbers: List<String>, val consentRequired: Boolean
+    )
 
     /** Throws IOException with a readable message when the server or token isn't right. */
     fun ping(): Ping {
@@ -42,14 +48,38 @@ class Api(private val serverUrl: String, private val token: String) {
             if (r.code == 401) throw IOException("Token rejected: ${detail(body)}")
             if (!r.isSuccessful) throw IOException("Server said ${r.code}: ${detail(body)}")
             val j = JSONObject(body)
-            val list = j.optJSONArray("rms")
-            val rms = (0 until (list?.length() ?: 0)).map { list!!.getJSONObject(it).let { o -> o.getInt("id") to o.getString("name") } }
-            return Ping(j.optInt("rm_id", -1).takeIf { !j.isNull("rm_id") } ?: -1, j.optString("rm_name", "")
-                .takeIf { !j.isNull("rm_name") } ?: "", j.optBoolean("rm_locked", true), rms)
+            val mode = j.optString("mode", "rm")
+
+            // Parse RM-specific fields
+            val rmList = j.optJSONArray("rms")
+            val rms = (0 until (rmList?.length() ?: 0)).map {
+                rmList!!.getJSONObject(it).let { o -> o.getInt("id") to o.getString("name") }
+            }
+
+            // Parse DC-specific fields
+            val allowedNumbers = j.optJSONArray("allowed_numbers")
+            val allowedList = (0 until (allowedNumbers?.length() ?: 0)).map {
+                allowedNumbers!!.getString(it)
+            }
+
+            return Ping(
+                mode = mode,
+                rmId = j.optInt("rm_id", -1).takeIf { !j.isNull("rm_id") } ?: -1,
+                rmName = j.optString("rm_name", "").takeIf { !j.isNull("rm_name") } ?: "",
+                locked = j.optBoolean("rm_locked", true),
+                rms = rms,
+                dcId = j.optInt("dc_id", -1).takeIf { !j.isNull("dc_id") } ?: -1,
+                dcName = j.optString("dc_name", "").takeIf { !j.isNull("dc_name") } ?: "",
+                employeeId = j.optInt("employee_id", -1).takeIf { !j.isNull("employee_id") } ?: -1,
+                employeeName = j.optString("employee_name", "").takeIf { !j.isNull("employee_name") } ?: "",
+                allowedNumbers = allowedList,
+                consentRequired = j.optBoolean("consent_required", false)
+            )
         }
     }
 
-    fun upload(resolver: ContentResolver, file: RecFile, call: CallEntry, deviceId: String, rmId: Int): Upload {
+    fun upload(resolver: ContentResolver, file: RecFile, call: CallEntry, deviceId: String, rmId: Int,
+               mode: String = "rm", dcId: Int = -1, employeeId: Int = -1, consentToken: String = ""): Upload {
         val audio = object : RequestBody() {
             override fun contentType(): MediaType = mimeFor(file.name).toMediaType()
             override fun contentLength() = file.size
@@ -65,7 +95,17 @@ class Api(private val serverUrl: String, private val token: String) {
             .addFormDataPart("direction", call.direction)
             .addFormDataPart("other_number", call.number)
             .addFormDataPart("device_id", deviceId)
-            .addFormDataPart("rm_id", rmId.toString())            // the RM chosen in setup: who made this call
+            .addFormDataPart("mode", mode)
+            .apply {
+                when (mode) {
+                    "rm" -> addFormDataPart("rm_id", rmId.toString())
+                    "dc" -> {
+                        addFormDataPart("dc_id", dcId.toString())
+                        if (consentToken.isNotEmpty()) addFormDataPart("consent_token", consentToken)
+                    }
+                    "employee" -> addFormDataPart("employee_id", employeeId.toString())
+                }
+            }
             .build()
         val req = Request.Builder().url("$serverUrl/api/uploader/recordings")
             .header("Authorization", "Bearer $token").post(form).build()
