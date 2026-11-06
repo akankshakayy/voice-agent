@@ -1,44 +1,224 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent" android:layout_height="match_parent" android:fitsSystemWindows="true">
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/gray_lighter">
 
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="vertical" android:padding="16dp">
-
-        <TextView style="@style/Heading" android:text="@string/step_server" />
-        <EditText android:id="@+id/server" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:hint="https://sahayak.example.in" android:inputType="textUri" android:importantForAutofill="no" />
-        <EditText android:id="@+id/token" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:hint="@string/token_hint" android:inputType="textPassword" android:importantForAutofill="no" />
-        <Button android:id="@+id/test" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="@string/test_connection" />
-        <TextView android:id="@+id/test_result" android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
-
-        <TextView style="@style/Heading" android:text="@string/step_rm" />
-        <Spinner android:id="@+id/rm" android:layout_width="match_parent" android:layout_height="wrap_content" />
-        <TextView android:id="@+id/rm_hint" style="@style/Hint" android:text="@string/rm_hint" />
-
-        <TextView style="@style/Heading" android:text="@string/step_sim" />
-        <Spinner android:id="@+id/sim" android:layout_width="match_parent" android:layout_height="wrap_content" />
-        <TextView style="@style/Hint" android:text="@string/sim_hint" />
-
-        <TextView style="@style/Heading" android:text="@string/step_folder" />
-        <Button android:id="@+id/pick_folder" android:layout_width="wrap_content"
-            android:layout_height="wrap_content" android:text="@string/pick_folder" />
-        <TextView android:id="@+id/folder" android:layout_width="match_parent" android:layout_height="wrap_content" />
-        <TextView style="@style/Hint" android:text="@string/folder_hint" />
-
-        <TextView style="@style/Heading" android:text="@string/step_schedule" />
-        <CheckBox android:id="@+id/wifi_only" android:layout_width="wrap_content"
-            android:layout_height="wrap_content" android:text="@string/wifi_only" />
-        <Button android:id="@+id/save" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="@string/save" />
-        <Button android:id="@+id/upload_now" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="@string/upload_now" />
-
-        <TextView style="@style/Heading" android:text="@string/status" />
-        <TextView android:id="@+id/status" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:textIsSelectable="true" />
+    <!-- Header Banner -->
+    <LinearLayout
+        style="@style/HeaderBanner"
+        android:orientation="vertical">
+        <TextView
+            style="@style/HeaderTitle"
+            android:text="Sahayak" />
+        <TextView
+            style="@style/HeaderSubtitle"
+            android:text="Call Recording Uploader" />
     </LinearLayout>
-</ScrollView>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!-- Step 1: Server Configuration -->
+            <TextView
+                style="@style/Heading"
+                android:text="1. Server Configuration" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:padding="16dp">
+
+                <TextView
+                    style="@style/Subheading"
+                    android:text="Server URL" />
+                <EditText
+                    android:id="@+id/server"
+                    style="@style/InputField"
+                    android:hint="https://indev.eko.in"
+                    android:inputType="textUri"
+                    android:importantForAutofill="no" />
+
+                <TextView
+                    style="@style/Subheading"
+                    android:text="Upload Token" />
+                <EditText
+                    android:id="@+id/token"
+                    style="@style/InputField"
+                    android:hint="Paste token here"
+                    android:inputType="textPassword"
+                    android:importantForAutofill="no" />
+
+                <Button
+                    android:id="@+id/test"
+                    style="@style/ButtonPrimary"
+                    android:text="Test Connection" />
+
+                <TextView
+                    android:id="@+id/test_result"
+                    style="@style/StatusText"
+                    android:textIsSelectable="true" />
+            </LinearLayout>
+
+            <!-- Step 2: Mode & User Selection -->
+            <TextView
+                style="@style/Heading"
+                android:text="2. Select Mode & User" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:padding="16dp">
+
+                <Spinner
+                    android:id="@+id/mode"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone" />
+
+                <Spinner
+                    android:id="@+id/rm"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content" />
+                <TextView
+                    android:id="@+id/rm_hint"
+                    style="@style/Hint"
+                    android:text="Select your name" />
+
+                <TextView
+                    android:id="@+id/allowed_numbers"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone"
+                    style="@style/StatusText" />
+
+                <LinearLayout
+                    android:id="@+id/consent_container"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+                    <CheckBox
+                        android:id="@+id/consent"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="I consent to share recordings"
+                        android:textColor="@color/text_primary" />
+                    <TextView
+                        style="@style/Hint"
+                        android:text="Required for data sharing" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Step 3: SIM & Recording Folder -->
+            <TextView
+                style="@style/Heading"
+                android:text="3. Eko SIM & Recording Folder" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:padding="16dp">
+
+                <TextView
+                    style="@style/Subheading"
+                    android:text="Eko SIM Card" />
+                <Spinner
+                    android:id="@+id/sim"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content" />
+                <TextView
+                    style="@style/Hint"
+                    android:text="The phone's SIM with Eko app calls" />
+
+                <TextView
+                    style="@style/Subheading"
+                    android:text="Recordings Folder" />
+                <Button
+                    android:id="@+id/pick_folder"
+                    style="@style/ButtonSecondary"
+                    android:text="📁 Choose Folder" />
+                <TextView
+                    android:id="@+id/folder"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:textSize="12sp"
+                    android:textColor="@color/text_secondary" />
+                <TextView
+                    style="@style/Hint"
+                    android:text="Select where call recordings are saved" />
+            </LinearLayout>
+
+            <!-- Step 4: Schedule & Upload -->
+            <TextView
+                style="@style/Heading"
+                android:text="4. Upload Schedule" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:padding="16dp"
+                android:layout_marginBottom="16dp">
+
+                <CheckBox
+                    android:id="@+id/wifi_only"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Only upload on WiFi"
+                    android:textColor="@color/text_primary"
+                    android:layout_marginBottom="16dp" />
+
+                <Button
+                    android:id="@+id/save"
+                    style="@style/ButtonPrimary"
+                    android:text="💾 Save Configuration" />
+
+                <Button
+                    android:id="@+id/upload_now"
+                    style="@style/ButtonPrimary"
+                    android:text="⬆ Upload Now" />
+            </LinearLayout>
+
+            <!-- Status Section -->
+            <TextView
+                style="@style/Heading"
+                android:text="Upload Status" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:padding="16dp"
+                android:layout_marginBottom="24dp">
+
+                <TextView
+                    android:id="@+id/status"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textIsSelectable="true"
+                    android:textSize="12sp"
+                    android:textColor="@color/text_secondary"
+                    android:textMonospace="true"
+                    android:minHeight="100dp" />
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

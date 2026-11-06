@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Eko Brand Colors -->
+    <color name="eko_primary">#1B5E20</color>
+    <color name="eko_primary_dark">#0D3817</color>
+    <color name="eko_accent">#4CAF50</color>
+    <color name="eko_light">#A5D6A7</color>
+
+    <!-- Neutrals -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="gray_dark">#212121</color>
+    <color name="gray_medium">#757575</color>
+    <color name="gray_light">#BDBDBD</color>
+    <color name="gray_lighter">#F5F5F5</color>
+
+    <!-- Status Colors -->
+    <color name="success">#4CAF50</color>
+    <color name="error">#F44336</color>
+    <color name="warning">#FF9800</color>
+    <color name="info">#2196F3</color>
+
+    <!-- Text Colors -->
+    <color name="text_primary">#212121</color>
+    <color name="text_secondary">#757575</color>
+    <color name="text_hint">#BDBDBD</color>
+</resources>
