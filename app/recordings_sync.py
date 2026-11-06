@@ -8,12 +8,9 @@ Usage:
     python -m app.recordings_sync --all        # Sync all recordings
     python -m app.recordings_sync --limit 10   # Sync first 10
 """
-import os
-import re
 import sqlite3
 import sys
 from pathlib import Path
-from datetime import datetime
 
 # Configuration - matching db_sync.py
 LOCAL_DB = Path(__file__).parent.parent / "data" / "eko_agent.db"
@@ -38,21 +35,6 @@ def get_credentials():
                 credentials['password'] = match.group(1).strip()
 
     return credentials
-
-def get_failed_recordings(limit=None):
-    """Get list of failed recordings from local database."""
-    conn = sqlite3.connect(LOCAL_DB)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-
-    query = "SELECT id, file_path FROM recordings WHERE status = 'failed'"
-    if limit:
-        query += f" LIMIT {limit}"
-
-    cursor.execute(query)
-    recordings = cursor.fetchall()
-    conn.close()
-    return recordings
 
 def sync_recordings(status_filter=None, limit=None):
     """Sync audio files from server using SFTP.
@@ -141,8 +123,11 @@ def sync_recordings(status_filter=None, limit=None):
                 print(f"  OK ID {rec_id}: {rel_path} ({size_mb:.1f} MB)")
                 synced += 1
 
-            except FileNotFoundError:
-                print(f"  SKIP ID {rec_id}: File not found on server")
+            except (IOError, OSError) as e:
+                if "No such file" in str(e):
+                    print(f"  SKIP ID {rec_id}: File not found on server")
+                else:
+                    print(f"  ERROR ID {rec_id}: {str(e)[:80]}")
                 failed += 1
             except Exception as e:
                 print(f"  ERROR ID {rec_id}: {str(e)[:80]}")
@@ -160,7 +145,13 @@ def sync_recordings(status_filter=None, limit=None):
         print(f"Failed: {failed}")
 
     # Check total size
-    total_size = sum(f.stat().st_size for f in LOCAL_RECORDINGS.rglob("*") if f.is_file())
+    total_size = 0
+    for f in LOCAL_RECORDINGS.rglob("*"):
+        if f.is_file():
+            try:
+                total_size += f.stat().st_size
+            except (FileNotFoundError, OSError):
+                pass
     total_mb = total_size / (1024*1024)
     print(f"Total recordings size: {total_mb:.1f} MB")
 
@@ -176,7 +167,7 @@ if __name__ == "__main__":
         elif arg.startswith("--limit"):
             try:
                 limit = int(arg.split("=")[1])
-            except:
+            except (ValueError, IndexError):
                 limit = 10
 
     sync_recordings(status_filter=filter_type, limit=limit)
