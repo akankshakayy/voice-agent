@@ -168,6 +168,108 @@ def validate_dc_consent(dc_id: int, consent_token: str) -> bool:
     return bool(row)
 
 
+def send_to_prachi_api(rec: dict) -> bool:
+    """Send DC recording (with transcript) to Prachi's API. Returns True if success/fatal, False if retry."""
+    import os
+    import requests
+
+    prachi_url = os.environ.get("PRACHI_API_URL")
+    prachi_key = os.environ.get("PRACHI_API_KEY")
+
+    if not prachi_url or not prachi_key:
+        log.warning(f"PRACHI_API_URL or PRACHI_API_KEY not set; skipping Prachi sync for recording {rec['id']}")
+        return True
+
+    if not rec.get("transcript_json"):
+        log.debug(f"Recording {rec['id']} has no transcript; not sending to Prachi")
+        return True
+
+    payload = {
+        "recording_id": rec["id"],
+        "dc_id": rec.get("dc_id"),
+        "timestamp": rec.get("uploaded_at"),
+        "transcript": json.loads(rec["transcript_json"]) if isinstance(rec["transcript_json"], str) else rec["transcript_json"],
+        "other_number": rec.get("other_number"),
+        "duration_sec": rec.get("duration_sec")
+    }
+
+    try:
+        response = requests.post(
+            f"{prachi_url}/api/recordings",
+            json=payload,
+            headers={"Authorization": f"Bearer {prachi_key}"},
+            timeout=30
+        )
+        if response.status_code == 200:
+            result = response.json()
+            db.update("recordings", rec["id"],
+                     prachi_api_sent_at=time.time(),
+                     prachi_request_id=result.get("request_id"))
+            log.info(f"Recording {rec['id']} sent to Prachi API (req_id={result.get('request_id')})")
+            return True
+        elif response.status_code >= 500:
+            log.warning(f"Prachi API error {response.status_code} for recording {rec['id']}; will retry")
+            return False
+        else:
+            log.error(f"Prachi API rejected recording {rec['id']}: {response.status_code}")
+            return True
+    except requests.Timeout:
+        log.warning(f"Prachi API timeout for recording {rec['id']}; will retry")
+        return False
+    except Exception as e:
+        log.error(f"Failed to send recording {rec['id']} to Prachi API: {e}")
+        return False
+
+
+def send_to_mansi_api(rec: dict) -> bool:
+    """Send Employee recording (no transcript) to Mansi's API. Returns True if success/fatal, False if retry."""
+    import os
+    import requests
+
+    mansi_url = os.environ.get("MANSI_API_URL")
+    mansi_key = os.environ.get("MANSI_API_KEY")
+
+    if not mansi_url or not mansi_key:
+        log.warning(f"MANSI_API_URL or MANSI_API_KEY not set; skipping Mansi sync for recording {rec['id']}")
+        return True
+
+    payload = {
+        "recording_id": rec["id"],
+        "employee_id": rec.get("employee_id"),
+        "timestamp": rec.get("uploaded_at"),
+        "other_number": rec.get("other_number"),
+        "duration_sec": rec.get("duration_sec"),
+        "file_path": rec.get("file_path")
+    }
+
+    try:
+        response = requests.post(
+            f"{mansi_url}/api/recordings",
+            json=payload,
+            headers={"Authorization": f"Bearer {mansi_key}"},
+            timeout=30
+        )
+        if response.status_code == 200:
+            result = response.json()
+            db.update("recordings", rec["id"],
+                     mansi_api_sent_at=time.time(),
+                     mansi_request_id=result.get("request_id"))
+            log.info(f"Recording {rec['id']} sent to Mansi API (req_id={result.get('request_id')})")
+            return True
+        elif response.status_code >= 500:
+            log.warning(f"Mansi API error {response.status_code} for recording {rec['id']}; will retry")
+            return False
+        else:
+            log.error(f"Mansi API rejected recording {rec['id']}: {response.status_code}")
+            return True
+    except requests.Timeout:
+        log.warning(f"Mansi API timeout for recording {rec['id']}; will retry")
+        return False
+    except Exception as e:
+        log.error(f"Failed to send recording {rec['id']} to Mansi API: {e}")
+        return False
+
+
 # ---------------------------------------------------------------- receiving files
 def save_upload(device: dict, data: bytes, filename: str, started_at_ms: int | None = None,
                 duration_sec: float | None = None, direction: str = "unknown", other_number: str = "",
@@ -766,8 +868,20 @@ def stt_confidence(cache: dict) -> float | None:
 def process_one(r: dict):
     started, t0 = time.time(), time.perf_counter()
     path = os.path.join(storage_dir(), r["file_path"])
+    mode = r.get("mode", "rm")
 
-    # Skip transcription for DC calls - just mark as done
+    # Employee mode: skip transcription, send to Mansi's API
+    if mode == "employee":
+        db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
+                  summary="Employee recording - no transcription", transcript_json=[], is_csp_call=0)
+        log.info(f"Employee recording {r['id']} marked done (no transcription)")
+        # Send to Mansi's API
+        if not send_to_mansi_api(r):
+            # If API send fails, keep it as done but log failure
+            log.warning(f"Failed to send employee recording {r['id']} to Mansi API")
+        return
+
+    # Legacy DC call type support (backward compat)
     if r.get("call_type") == "dc":
         db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
                   summary="DC call - no transcription", transcript_json=[], is_csp_call=0)
@@ -827,6 +941,13 @@ def process_one(r: dict):
               summary=review.get("summary"), model=model)
     _write_summary(r["id"])
     integrations.recording_processed(r["id"])
+
+    # DC mode: send to Prachi's API after transcription
+    if mode == "dc":
+        # Fetch updated recording with transcript
+        rec_updated = db.q("SELECT * FROM recordings WHERE id=?", (r["id"],), one=True)
+        if not send_to_prachi_api(rec_updated):
+            log.warning(f"Failed to send DC recording {r['id']} to Prachi API; will retry on next run")
 
 
 def _write_summary(rec_id: int):
