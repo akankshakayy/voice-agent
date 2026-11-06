@@ -12,6 +12,13 @@ DB_PATH = os.environ.get("EKO_DB_PATH") or os.path.join(
 _lock = threading.RLock()
 
 SCHEMA = """
+-- INVARIANT: All recordings and upload_tokens must satisfy mode/ID consistency:
+--   mode='rm' => rm_id IS NOT NULL, dc_id IS NULL, employee_id IS NULL
+--   mode='dc' => dc_id IS NOT NULL, rm_id IS NULL, employee_id IS NULL
+--   mode='employee' => employee_id IS NOT NULL, rm_id IS NULL, dc_id IS NULL
+-- This is enforced at the application level, not in the schema (for flexibility during migration).
+-- See app/recordings.py and app/main.py for validation.
+
 CREATE TABLE IF NOT EXISTS rms (
     id INTEGER PRIMARY KEY, name TEXT, phone TEXT, region TEXT,
     email TEXT,                -- from the calling sheet; a verified login with this email is linked to the RM
@@ -103,7 +110,7 @@ CREATE TABLE IF NOT EXISTS allowed_numbers (  -- Phone numbers DCs can upload fr
 );
 CREATE TABLE IF NOT EXISTS dc_consents (      -- One-time consent tracking for DC mode
     id INTEGER PRIMARY KEY, dc_id INTEGER REFERENCES dcs(id), call_phone TEXT,
-    consented_at REAL, consent_token TEXT UNIQUE, expires_at REAL, used_at REAL
+    consented_at REAL, consent_token TEXT NOT NULL UNIQUE, expires_at REAL, used_at REAL
 );
 CREATE TABLE IF NOT EXISTS upload_tokens (   -- one per RM/DC/Employee phone running the uploader app (uploader/)
     id INTEGER PRIMARY KEY, token_hash TEXT UNIQUE, rm_id INTEGER REFERENCES rms(id),
@@ -258,10 +265,13 @@ CREATE INDEX IF NOT EXISTS idx_auth_events_email ON auth_events(email, event, ts
 CREATE INDEX IF NOT EXISTS idx_deliveries_due ON webhook_deliveries(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status, uploaded_at);
 CREATE INDEX IF NOT EXISTS idx_recordings_mode ON recordings(mode, uploaded_at DESC);
-CREATE INDEX IF NOT EXISTS idx_recordings_dc ON recordings(dc_id, uploaded_at DESC);
-CREATE INDEX IF NOT EXISTS idx_recordings_employee ON recordings(employee_id, uploaded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recordings_dc ON recordings(dc_id, uploaded_at DESC) WHERE dc_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_recordings_employee ON recordings(employee_id, uploaded_at DESC) WHERE employee_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_recordings_rm ON recordings(rm_id, uploaded_at DESC) WHERE rm_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_allowed_numbers_dc ON allowed_numbers(dc_id, phone_number);
-CREATE INDEX IF NOT EXISTS idx_upload_tokens_mode ON upload_tokens(mode, rm_id, dc_id, employee_id);
+CREATE INDEX IF NOT EXISTS idx_upload_tokens_rm ON upload_tokens(rm_id) WHERE rm_id IS NOT NULL AND mode='rm';
+CREATE INDEX IF NOT EXISTS idx_upload_tokens_dc ON upload_tokens(dc_id) WHERE dc_id IS NOT NULL AND mode='dc';
+CREATE INDEX IF NOT EXISTS idx_upload_tokens_employee ON upload_tokens(employee_id) WHERE employee_id IS NOT NULL AND mode='employee';
 CREATE INDEX IF NOT EXISTS idx_calls_started ON calls(started_at);
 CREATE INDEX IF NOT EXISTS idx_turns_call ON turns(call_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_rm ON tickets(rm_id, status);
@@ -359,20 +369,23 @@ def conn() -> sqlite3.Connection:
         except Exception as e:
             pass  # May fail if migrations were already applied or table doesn't exist yet
         # Multi-use-case uploader extension: add DC/Employee support
-        _add_columns(_conn, "upload_tokens", {
-            "mode": "TEXT DEFAULT 'rm'",
-            "dc_id": "INTEGER REFERENCES dcs(id)",
-            "employee_id": "INTEGER REFERENCES employees(id)"
-        })
-        _add_columns(_conn, "recordings", {
-            "mode": "TEXT DEFAULT 'rm'",
-            "dc_id": "INTEGER REFERENCES dcs(id)",
-            "employee_id": "INTEGER REFERENCES employees(id)",
-            "prachi_api_sent_at": "REAL",
-            "prachi_request_id": "TEXT",
-            "mansi_api_sent_at": "REAL",
-            "mansi_request_id": "TEXT"
-        })
+        try:
+            _add_columns(_conn, "upload_tokens", {
+                "mode": "TEXT DEFAULT 'rm'",
+                "dc_id": "INTEGER REFERENCES dcs(id)",
+                "employee_id": "INTEGER REFERENCES employees(id)"
+            })
+            _add_columns(_conn, "recordings", {
+                "mode": "TEXT DEFAULT 'rm'",
+                "dc_id": "INTEGER REFERENCES dcs(id)",
+                "employee_id": "INTEGER REFERENCES employees(id)",
+                "prachi_api_sent_at": "REAL",
+                "prachi_request_id": "TEXT",
+                "mansi_api_sent_at": "REAL",
+                "mansi_request_id": "TEXT"
+            })
+        except Exception as e:
+            pass  # Migrations may already be applied or table doesn't exist
     return _conn
 
 
