@@ -89,19 +89,40 @@ CREATE TABLE IF NOT EXISTS auth_tokens (      -- one-time links sent by email: p
 CREATE TABLE IF NOT EXISTS auth_events (      -- sign-ins, failures, resets, role changes (also drives the lockout)
     id INTEGER PRIMARY KEY, ts REAL, user_id INTEGER, email TEXT, event TEXT, ip TEXT, detail TEXT
 );
-CREATE TABLE IF NOT EXISTS upload_tokens (   -- one per RM phone running the uploader app (uploader/)
-    id INTEGER PRIMARY KEY, token_hash TEXT UNIQUE, rm_id INTEGER REFERENCES rms(id), label TEXT,
+CREATE TABLE IF NOT EXISTS dcs (              -- Data Collectors (for DC mode uploader)
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT UNIQUE, email TEXT UNIQUE, region TEXT,
+    created_by TEXT, created_at REAL, active INTEGER DEFAULT 1, updated_at REAL
+);
+CREATE TABLE IF NOT EXISTS employees (        -- Employees (for Employee mode uploader)
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT UNIQUE, email TEXT UNIQUE, department TEXT,
+    created_by TEXT, created_at REAL, active INTEGER DEFAULT 1, updated_at REAL
+);
+CREATE TABLE IF NOT EXISTS allowed_numbers (  -- Phone numbers DCs can upload from
+    id INTEGER PRIMARY KEY, dc_id INTEGER REFERENCES dcs(id), phone_number TEXT NOT NULL,
+    description TEXT, added_by TEXT, added_at REAL, UNIQUE(dc_id, phone_number)
+);
+CREATE TABLE IF NOT EXISTS dc_consents (      -- One-time consent tracking for DC mode
+    id INTEGER PRIMARY KEY, dc_id INTEGER REFERENCES dcs(id), call_phone TEXT,
+    consented_at REAL, consent_token TEXT UNIQUE, expires_at REAL, used_at REAL
+);
+CREATE TABLE IF NOT EXISTS upload_tokens (   -- one per RM/DC/Employee phone running the uploader app (uploader/)
+    id INTEGER PRIMARY KEY, token_hash TEXT UNIQUE, rm_id INTEGER REFERENCES rms(id),
+    dc_id INTEGER REFERENCES dcs(id), employee_id INTEGER REFERENCES employees(id),
+    mode TEXT DEFAULT 'rm', label TEXT,
     created_by TEXT, created_at REAL, last_used_at REAL, revoked_at REAL
 );
 CREATE TABLE IF NOT EXISTS recordings (      -- real RM-CSP call recordings from the Eko SIM (app/recordings.py)
-    id INTEGER PRIMARY KEY, sha256 TEXT UNIQUE, rm_id INTEGER, token_id INTEGER, device_id TEXT,
+    id INTEGER PRIMARY KEY, sha256 TEXT UNIQUE, rm_id INTEGER, dc_id INTEGER, employee_id INTEGER,
+    token_id INTEGER, device_id TEXT, mode TEXT DEFAULT 'rm',
     file_path TEXT, orig_name TEXT, size_bytes INTEGER,
     started_at REAL, duration_sec REAL, direction TEXT, other_number TEXT, csp_id INTEGER, uploaded_at REAL,
     status TEXT,               -- new | done | failed
     attempts INTEGER DEFAULT 0, error TEXT, processed_at REAL,
     is_csp_call INTEGER, language TEXT, transcript_json TEXT, issue_segment INTEGER,
     intent TEXT, intent_confidence REAL, slots_json TEXT, sentiment TEXT, resolution TEXT,
-    rm_handling TEXT, summary TEXT, model TEXT
+    rm_handling TEXT, summary TEXT, model TEXT,
+    prachi_api_sent_at REAL, prachi_request_id TEXT,
+    mansi_api_sent_at REAL, mansi_request_id TEXT
 );
 CREATE TABLE IF NOT EXISTS api_keys (         -- other systems calling the API (app/integrations.py)
     id INTEGER PRIMARY KEY, key_hash TEXT UNIQUE, name TEXT, role TEXT, created_by TEXT,
@@ -236,6 +257,11 @@ CREATE INDEX IF NOT EXISTS idx_corrections_ref ON corrections(source, ref_id);
 CREATE INDEX IF NOT EXISTS idx_auth_events_email ON auth_events(email, event, ts);
 CREATE INDEX IF NOT EXISTS idx_deliveries_due ON webhook_deliveries(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status, uploaded_at);
+CREATE INDEX IF NOT EXISTS idx_recordings_mode ON recordings(mode, uploaded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recordings_dc ON recordings(dc_id, uploaded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recordings_employee ON recordings(employee_id, uploaded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_allowed_numbers_dc ON allowed_numbers(dc_id, phone_number);
+CREATE INDEX IF NOT EXISTS idx_upload_tokens_mode ON upload_tokens(mode, rm_id, dc_id, employee_id);
 CREATE INDEX IF NOT EXISTS idx_calls_started ON calls(started_at);
 CREATE INDEX IF NOT EXISTS idx_turns_call ON turns(call_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_rm ON tickets(rm_id, status);
@@ -332,6 +358,21 @@ def conn() -> sqlite3.Connection:
                 })
         except Exception as e:
             pass  # May fail if migrations were already applied or table doesn't exist yet
+        # Multi-use-case uploader extension: add DC/Employee support
+        _add_columns(_conn, "upload_tokens", {
+            "mode": "TEXT DEFAULT 'rm'",
+            "dc_id": "INTEGER REFERENCES dcs(id)",
+            "employee_id": "INTEGER REFERENCES employees(id)"
+        })
+        _add_columns(_conn, "recordings", {
+            "mode": "TEXT DEFAULT 'rm'",
+            "dc_id": "INTEGER REFERENCES dcs(id)",
+            "employee_id": "INTEGER REFERENCES employees(id)",
+            "prachi_api_sent_at": "REAL",
+            "prachi_request_id": "TEXT",
+            "mansi_api_sent_at": "REAL",
+            "mansi_request_id": "TEXT"
+        })
     return _conn
 
 
