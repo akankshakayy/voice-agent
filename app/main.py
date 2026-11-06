@@ -1114,22 +1114,59 @@ def _device(request: Request) -> dict:
 
 @app.get("/api/uploader/ping")
 def uploader_ping(device=Depends(_device)):
-    """The app's setup screen: whose phone this is, or (shared token) the RMs to choose from. Only for a valid
-    upload token, and only ids and names."""
-    return {"ok": True, "rm_id": device["rm_id"], "rm_name": device["rm_name"], "rm_locked": bool(device["rm_id"]),
-            "rms": recordings.rms_for_app()}
+    """The app's setup screen: mode-specific info for RM/DC/Employee. Only for a valid upload token."""
+    mode = device.get("mode", "rm")
+    result = {"ok": True, "mode": mode}
+
+    if mode == "rm":
+        result.update({
+            "rm_id": device.get("rm_id", -1),
+            "rm_name": device.get("rm_name", ""),
+            "rm_locked": bool(device.get("rm_id")),
+            "rms": recordings.rms_for_app()
+        })
+    elif mode == "dc":
+        result.update({
+            "dc_id": device.get("dc_id", -1),
+            "dc_name": device.get("dc_name", ""),
+            "allowed_numbers": recordings.get_allowed_numbers(device.get("dc_id", -1)) if device.get("dc_id") else [],
+            "consent_required": not device.get("consent_token")
+        })
+    elif mode == "employee":
+        result.update({
+            "employee_id": device.get("employee_id", -1),
+            "employee_name": device.get("employee_name", "")
+        })
+
+    return result
 
 
 @app.post("/api/uploader/recordings")
 def uploader_upload(audio: UploadFile = File(...), started_at: int | None = Form(None),
                     duration_sec: float | None = Form(None), direction: str = Form("unknown"),
                     other_number: str = Form(""), device_id: str = Form(""), rm_id: int | None = Form(None),
+                    mode: str = Form("rm"), consent_token: str | None = Form(None),
                     device=Depends(_device)):
+    """Upload a recording. Mode-aware: validates mode-specific constraints."""
     data = audio.file.read(recordings.MAX_BYTES + 1)
     if len(data) > recordings.MAX_BYTES:
         raise HTTPException(413, "Recording is over 100 MB")
     try:
-        device = {**device, "rm_id": recordings.uploader_rm(device, rm_id)}
+        # Validate mode matches token
+        if mode != device.get("mode", "rm"):
+            raise ValueError(f"Token mode is {device.get('mode', 'rm')}, not {mode}")
+
+        # Mode-specific setup
+        if mode == "rm":
+            device = {**device, "rm_id": recordings.uploader_rm(device, rm_id)}
+        elif mode == "dc":
+            if not device.get("dc_id"):
+                raise ValueError("DC token must have dc_id")
+            device = {**device, "consent_token": consent_token or ""}
+        elif mode == "employee":
+            if not device.get("employee_id"):
+                raise ValueError("Employee token must have employee_id")
+
         return recordings.save_upload(device, data, audio.filename or "", started_at, duration_sec, direction,
                                       other_number, device_id)
     except ValueError as e:
@@ -1159,6 +1196,128 @@ def revoke_upload_token(token_id: int):
     if not recordings.revoke_token(token_id):
         raise HTTPException(404, "No active token with that id")
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ DC (Data Collector) Management
+@app.get("/api/dcs", dependencies=[Depends(allow("admin"))])
+def list_dcs():
+    """List all Data Collectors."""
+    return db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
+
+
+class DCBody(BaseModel):
+    name: str
+    phone: str | None = None
+    email: str | None = None
+    region: str | None = None
+
+
+@app.post("/api/dcs", dependencies=[Depends(allow("admin"))])
+def create_dc(body: DCBody, actor=Depends(allow("admin"))):
+    """Create a new Data Collector."""
+    try:
+        dc_id = db.x("""INSERT INTO dcs(name, phone, email, region, created_by, created_at, active)
+                        VALUES(?, ?, ?, ?, ?, ?, 1)""",
+                     (body.name, body.phone, body.email, body.region, actor.get("email"), time.time()))
+        return {"id": dc_id, "name": body.name}
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(400, f"Phone or email already exists: {e}")
+
+
+@app.patch("/api/dcs/{dc_id}", dependencies=[Depends(allow("admin"))])
+def update_dc(dc_id: int, body: DCBody):
+    """Update a Data Collector."""
+    fields = {k: v for k, v in body.dict().items() if v is not None}
+    if not fields:
+        return {"ok": True}
+    fields["updated_at"] = time.time()
+    db.update("dcs", dc_id, **fields)
+    return db.q("SELECT * FROM dcs WHERE id=?", (dc_id,), one=True)
+
+
+# ------------------------------------------------------------------ Allowed Numbers Management
+@app.get("/api/allowed-numbers", dependencies=[Depends(allow("admin"))])
+def list_allowed_numbers(dc_id: int | None = None):
+    """List allowed phone numbers. Optionally filter by DC."""
+    if dc_id:
+        return db.q("SELECT id, dc_id, phone_number, description, added_at FROM allowed_numbers WHERE dc_id=? ORDER BY phone_number",
+                   (dc_id,))
+    return db.q("SELECT id, dc_id, phone_number, description, added_at FROM allowed_numbers ORDER BY dc_id, phone_number")
+
+
+@app.get("/api/uploader/allowed-numbers")
+def get_allowed_numbers_for_uploader(device=Depends(_device)):
+    """Get allowed numbers for a DC (uploader app endpoint, no admin auth required)."""
+    if device.get("mode") != "dc":
+        raise HTTPException(400, "Only DC mode can access this endpoint")
+    dc_id = device.get("dc_id", -1)
+    if dc_id < 0:
+        raise HTTPException(400, "DC token must have dc_id")
+    return {"allowed_numbers": recordings.get_allowed_numbers(dc_id)}
+
+
+class AllowedNumberBody(BaseModel):
+    phone_number: str
+    description: str | None = None
+    dc_id: int | None = None  # If None, applies to all DCs (shared list)
+
+
+@app.post("/api/allowed-numbers", dependencies=[Depends(allow("admin"))])
+def add_allowed_number(body: AllowedNumberBody, actor=Depends(allow("admin"))):
+    """Add a phone number to allowed list."""
+    try:
+        num_id = db.x("""INSERT INTO allowed_numbers(dc_id, phone_number, description, added_by, added_at)
+                        VALUES(?, ?, ?, ?, ?)""",
+                     (body.dc_id, body.phone_number, body.description, actor.get("email"), time.time()))
+        return {"id": num_id, "phone_number": body.phone_number, "dc_id": body.dc_id}
+    except sqlite3.IntegrityError:
+        raise HTTPException(400, f"Phone number already in allowed list for this DC")
+
+
+@app.delete("/api/allowed-numbers/{number_id}", dependencies=[Depends(allow("admin"))])
+def remove_allowed_number(number_id: int):
+    """Remove a phone number from allowed list."""
+    if not db.q("SELECT id FROM allowed_numbers WHERE id=?", (number_id,), one=True):
+        raise HTTPException(404, "Number not found")
+    db.x("DELETE FROM allowed_numbers WHERE id=?", (number_id,))
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ Employee Management
+@app.get("/api/employees", dependencies=[Depends(allow("admin"))])
+def list_employees():
+    """List all Employees."""
+    return db.q("SELECT id, name, phone, email, department, created_at, active FROM employees ORDER BY name")
+
+
+class EmployeeBody(BaseModel):
+    name: str
+    phone: str | None = None
+    email: str | None = None
+    department: str | None = None
+
+
+@app.post("/api/employees", dependencies=[Depends(allow("admin"))])
+def create_employee(body: EmployeeBody, actor=Depends(allow("admin"))):
+    """Create a new Employee."""
+    try:
+        emp_id = db.x("""INSERT INTO employees(name, phone, email, department, created_by, created_at, active)
+                        VALUES(?, ?, ?, ?, ?, ?, 1)""",
+                     (body.name, body.phone, body.email, body.department, actor.get("email"), time.time()))
+        return {"id": emp_id, "name": body.name}
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(400, f"Phone or email already exists: {e}")
+
+
+@app.patch("/api/employees/{employee_id}", dependencies=[Depends(allow("admin"))])
+def update_employee(employee_id: int, body: EmployeeBody):
+    """Update an Employee."""
+    fields = {k: v for k, v in body.dict().items() if v is not None}
+    if not fields:
+        return {"ok": True}
+    fields["updated_at"] = time.time()
+    db.update("employees", employee_id, **fields)
+    return db.q("SELECT * FROM employees WHERE id=?", (employee_id,), one=True)
 
 
 @app.get("/api/recordings", dependencies=[Depends(allow("admin", "ops", "rm"))])

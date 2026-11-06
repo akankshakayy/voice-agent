@@ -113,9 +113,14 @@ def revoke_token(token_id: int) -> bool:
 
 
 def device_for_token(token: str | None) -> dict | None:
+    """Get device info from token, including mode-specific fields (DC/Employee)."""
     if not token:
         return None
-    dev = db.q("""SELECT t.*, r.name AS rm_name FROM upload_tokens t LEFT JOIN rms r ON r.id=t.rm_id
+    dev = db.q("""SELECT t.*, r.name AS rm_name, d.name AS dc_name, e.name AS employee_name
+                  FROM upload_tokens t
+                  LEFT JOIN rms r ON r.id=t.rm_id
+                  LEFT JOIN dcs d ON d.id=t.dc_id
+                  LEFT JOIN employees e ON e.id=t.employee_id
                   WHERE t.token_hash=? AND t.revoked_at IS NULL""", (_h(token),), one=True)
     if dev:
         db.update("upload_tokens", dev["id"], last_used_at=time.time())
@@ -139,13 +144,55 @@ def uploader_rm(device: dict, chosen: int | None) -> int:
     return int(chosen)
 
 
+def get_allowed_numbers(dc_id: int) -> list[str]:
+    """Get list of allowed phone numbers for a DC."""
+    rows = db.q("SELECT DISTINCT phone_number FROM allowed_numbers WHERE dc_id=? ORDER BY phone_number", (dc_id,))
+    return [r["phone_number"] for r in rows]
+
+
+def is_allowed_number(dc_id: int, phone_number: str) -> bool:
+    """Check if a phone number is in the DC's allowed list."""
+    if not phone_number:
+        return False
+    allowed = db.q("SELECT id FROM allowed_numbers WHERE dc_id=? AND phone_number=?", (dc_id, phone_number), one=True)
+    return bool(allowed)
+
+
+def validate_dc_consent(dc_id: int, consent_token: str) -> bool:
+    """Check if DC consent token is valid and not expired."""
+    if not consent_token:
+        return False
+    row = db.q("""SELECT expires_at FROM dc_consents WHERE dc_id=? AND consent_token=? AND used_at IS NULL
+                  AND (expires_at IS NULL OR expires_at > ?)""",
+               (dc_id, consent_token, time.time()), one=True)
+    return bool(row)
+
+
 # ---------------------------------------------------------------- receiving files
 def save_upload(device: dict, data: bytes, filename: str, started_at_ms: int | None = None,
                 duration_sec: float | None = None, direction: str = "unknown", other_number: str = "",
                 device_id: str = "") -> dict:
-    """Store one recording from a phone. The same file sent twice is stored once (matched by SHA-256)."""
+    """Store one recording from a phone. The same file sent twice is stored once (matched by SHA-256).
+    Mode-aware: stores in rmX/, dcX/, or employeeX/ directories based on device mode."""
     if not data:
         raise ValueError("Empty file")
+
+    # Validate mode and IDs match
+    mode = device.get("mode", "rm")
+    if mode == "dc":
+        if not device.get("dc_id"):
+            raise ValueError("DC mode requires dc_id")
+        if device.get("consent_token") and not validate_dc_consent(device["dc_id"], device["consent_token"]):
+            raise ValueError("DC consent token is invalid or expired")
+        if not is_allowed_number(device["dc_id"], other_number):
+            raise ValueError(f"Phone number {other_number} not in DC allowed list")
+    elif mode == "employee":
+        if not device.get("employee_id"):
+            raise ValueError("Employee mode requires employee_id")
+    elif mode == "rm":
+        if not device.get("rm_id"):
+            raise ValueError("RM mode requires rm_id")
+
     ext = os.path.splitext(filename or "")[1].lower().lstrip(".")
     if ext not in AUDIO_EXTS:
         raise ValueError(f"Not a call recording: .{ext or '?'}")
@@ -155,7 +202,18 @@ def save_upload(device: dict, data: bytes, filename: str, started_at_ms: int | N
         return {"id": old["id"], "duplicate": True}
     started = started_at_ms / 1000 if started_at_ms else None
     day = datetime.fromtimestamp(started or time.time(), TZ).strftime("%Y-%m-%d")
-    rel = os.path.join(f"rm{device['rm_id']}" if device.get("rm_id") else "no-rm", day, f"{sha[:16]}.{ext}")
+
+    # Path organization by mode
+    if mode == "rm":
+        dir_prefix = f"rm{device['rm_id']}" if device.get("rm_id") else "no-rm"
+    elif mode == "dc":
+        dir_prefix = f"dc{device['dc_id']}"
+    elif mode == "employee":
+        dir_prefix = f"employee{device['employee_id']}"
+    else:
+        dir_prefix = "unknown"
+
+    rel = os.path.join(dir_prefix, day, f"{sha[:16]}.{ext}")
     path = os.path.join(storage_dir(), rel)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
@@ -165,15 +223,17 @@ def save_upload(device: dict, data: bytes, filename: str, started_at_ms: int | N
     digits = re.sub(r"\D", "", other_number or "")[-10:]
     csp = db.q("SELECT id FROM csps WHERE phone=?", (digits,), one=True) if digits else None
     try:
-        rid = db.x("""INSERT INTO recordings(sha256,rm_id,token_id,device_id,file_path,orig_name,size_bytes,started_at,
-                      duration_sec,direction,other_number,csp_id,uploaded_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'new')""",
-                   (sha, device["rm_id"], device["id"], (device_id or "")[:64], rel, (filename or "")[:200], len(data),
+        rid = db.x("""INSERT INTO recordings(sha256,rm_id,dc_id,employee_id,mode,token_id,device_id,file_path,orig_name,
+                      size_bytes,started_at,duration_sec,direction,other_number,csp_id,uploaded_at,status)
+                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new')""",
+                   (sha, device.get("rm_id"), device.get("dc_id"), device.get("employee_id"), mode,
+                    device["id"], (device_id or "")[:64], rel, (filename or "")[:200], len(data),
                     started, duration_sec, direction if direction in ("incoming", "outgoing") else "unknown",
                     digits or None, csp["id"] if csp else None, time.time()))
     except sqlite3.IntegrityError:          # the same file arrived twice at once
         return {"id": db.q("SELECT id FROM recordings WHERE sha256=?", (sha,), one=True)["id"], "duplicate": True}
     wake()
-    return {"id": rid, "duplicate": False}
+    return {"id": rid, "duplicate": False, "mode": mode}
 
 
 def _probe_duration(path: str) -> float | None:
