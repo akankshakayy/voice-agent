@@ -81,6 +81,46 @@ scp -P 2222 akanksha@indev.eko.in:/home/akanksha/voice_agent/data/eko_agent.db \
     ./data/eko_agent_server_backup.db
 ```
 
+## Syncing Audio Recordings
+
+### Overview
+While the database syncs recording **metadata**, the actual audio files need to be synced separately. Use `recordings_sync.py` to download audio files from the server for local testing.
+
+### Sync Audio Files
+```bash
+# Sync all failed recordings (default)
+python -m app.recordings_sync
+
+# Sync all recordings
+python -m app.recordings_sync --all
+
+# Sync first N recordings
+python -m app.recordings_sync --limit=10
+
+# Sync only pending recordings
+python -m app.recordings_sync --pending
+```
+
+The script:
+1. Connects via SFTP to `indev.eko.in:2222` using credentials from `.env`
+2. Downloads files from `/data/recordings` on the server
+3. Stores them in `/home/cat/eko-rm-voice-agent/data/recordings` locally
+4. Reports total size and sync status
+
+### Audio Storage Structure
+Files are organized by Resource Manager (RM) ID and date:
+```
+data/recordings/
+├── rm1/2026-10-14/385e71068d6a6121.aac
+├── no-rm/2026-10-23/dd3134f7d6699f8c.mp4
+└── rm2/2026-11-05/a1b2c3d4e5f6g7h8.wav
+```
+
+### When to Sync Recordings
+- Testing transcription locally: Need actual audio files
+- Debugging audio processing issues: Compare local vs server behavior
+- Testing with real-world data: Use production recordings
+
 ## Database Schema
 
 ### Key Tables
