@@ -305,13 +305,16 @@ def save_upload(device: dict, data: bytes, filename: str, started_at_ms: int | N
     started = started_at_ms / 1000 if started_at_ms else None
     day = datetime.fromtimestamp(started or time.time(), TZ).strftime("%Y-%m-%d")
 
-    # Path organization by mode
+    # Path organization by mode (all modes validated above, but be defensive)
     if mode == "rm":
-        dir_prefix = f"rm{device['rm_id']}" if device.get("rm_id") else "no-rm"
+        rm_id = device.get("rm_id", -1)
+        dir_prefix = f"rm{rm_id}" if rm_id > 0 else "no-rm"
     elif mode == "dc":
-        dir_prefix = f"dc{device['dc_id']}"
+        dc_id = device.get("dc_id", -1)
+        dir_prefix = f"dc{dc_id}"
     elif mode == "employee":
-        dir_prefix = f"employee{device['employee_id']}"
+        emp_id = device.get("employee_id", -1)
+        dir_prefix = f"employee{emp_id}"
     else:
         dir_prefix = "unknown"
 
@@ -329,7 +332,7 @@ def save_upload(device: dict, data: bytes, filename: str, started_at_ms: int | N
                       size_bytes,started_at,duration_sec,direction,other_number,csp_id,uploaded_at,status)
                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new')""",
                    (sha, device.get("rm_id"), device.get("dc_id"), device.get("employee_id"), mode,
-                    device["id"], (device_id or "")[:64], rel, (filename or "")[:200], len(data),
+                    device.get("id"), (device_id or "")[:64], rel, (filename or "")[:200], len(data),
                     started, duration_sec, direction if direction in ("incoming", "outgoing") else "unknown",
                     digits or None, csp["id"] if csp else None, time.time()))
     except sqlite3.IntegrityError:          # the same file arrived twice at once
