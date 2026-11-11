@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import agent, auth, autogmap, bootstrap, bulk_load, db, google_auth, integrations, mailer, metrics, misheard, recordings, report, stt, telemetry, tts  # noqa: E402
+from . import agent, auth, autogmap, bootstrap, bulk_load, db, google_auth, integrations, mailer, metrics, misheard, prachi_sync, recordings, report, stt, telemetry, tts  # noqa: E402
 from .logging_config import setup_logging  # noqa: E402
 from .seed import seed_if_demo  # noqa: E402
 from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, MAX_MISUNDERSTOOD  # noqa
@@ -55,6 +55,7 @@ async def lifespan(_app):
     threading.Thread(target=recordings.processing_loop, args=(stop,), daemon=True, name="recordings").start()
     threading.Thread(target=integrations.delivery_loop, args=(stop,), daemon=True, name="webhooks").start()
     threading.Thread(target=autogmap.sync_loop, args=(stop,), daemon=True, name="autogmap-sync").start()
+    threading.Thread(target=prachi_sync.sync_loop, args=(stop,), daemon=True, name="prachi-sync").start()
     yield
     stop.set()
     integrations.wake()
@@ -142,8 +143,8 @@ async def require_login(request: Request, call_next):
     Pages are also checked against the user's role here; API routes check roles with `allow(...)`."""
     path = route_path(request)
 
-    # Dev mode bypass: allow /admin from localhost without auth
-    if is_dev_mode() and path == "/admin":
+    # Dev mode bypass: allow requests from localhost without auth
+    if is_dev_mode():
         client_host = request.client.host if request.client else None
         if client_host and client_host in ("127.0.0.1", "localhost", "::1"):
             # Set a mock admin user for dev testing
@@ -2130,6 +2131,69 @@ def test_webhook(hook_id: int):
 @app.get("/api/integrations/deliveries", dependencies=[Depends(allow("admin"))])
 def deliveries(webhook_id: int | None = None, limit: int = 100):
     return integrations.list_deliveries(webhook_id, limit)
+
+
+# ------------------------------------------------------------------ prachi sync
+
+@app.get("/api/prachi/sync-status", dependencies=[Depends(allow("admin"))])
+def get_prachi_sync_status():
+    """Get current Prachi sync status and statistics."""
+    return prachi_sync.get_sync_status()
+
+
+@app.post("/api/prachi/sync-now", dependencies=[Depends(allow("admin"))])
+def trigger_prachi_sync_now():
+    """Trigger an immediate Prachi sync (don't wait for daily schedule)."""
+    import asyncio
+    from threading import Thread
+
+    def run_sync():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(prachi_sync.run_daily_sync())
+        finally:
+            loop.close()
+
+    # Run in background thread
+    thread = Thread(target=run_sync, daemon=True, name="prachi-manual-sync")
+    thread.start()
+
+    return {"status": "syncing", "message": "Prachi sync started in background"}
+
+
+@app.get("/api/prachi/sync-history", dependencies=[Depends(allow("admin"))])
+def get_prachi_sync_history(limit: int = 10):
+    """Get sync history with details (last N syncs)."""
+    try:
+        rows = db.q(
+            """SELECT id, sync_type, status, records_processed, records_added, records_updated,
+                      records_deleted, error_message, synced_at
+               FROM prachi_sync_history
+               ORDER BY synced_at DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        return {
+            "count": len(rows),
+            "syncs": [
+                {
+                    "id": row["id"],
+                    "sync_type": row["sync_type"],
+                    "status": row["status"],
+                    "records_processed": row["records_processed"],
+                    "records_added": row["records_added"],
+                    "records_updated": row["records_updated"],
+                    "records_deleted": row["records_deleted"],
+                    "error_message": row["error_message"],
+                    "synced_at": row["synced_at"],
+                }
+                for row in rows
+            ],
+        }
+    except Exception as e:
+        log.exception("Error fetching Prachi sync history")
+        raise HTTPException(500, f"Error fetching history: {e}")
 
 
 # ------------------------------------------------------------------ simulator
