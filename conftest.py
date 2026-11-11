@@ -2,7 +2,7 @@
 import pytest
 import tempfile
 import os
-from app import db
+from app import db, telemetry
 
 pytest_plugins = ("pytest_asyncio",)
 
@@ -15,5 +15,6 @@ def reset_database():
         db_path = os.path.join(tmpdir, "test.db")
         db.reset_connection(db_path)
         yield
-    # Clean up
+    # Clean up: stop telemetry thread before closing connection
+    telemetry.shutdown()
     db.reset_connection()

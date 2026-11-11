@@ -27,6 +27,7 @@ _worker = None
 _worker_lock = threading.Lock()
 _last_purge = 0.0
 _version = None
+_stop_event = threading.Event()
 
 
 # ---------------------------------------------------------------- prompt version
@@ -87,26 +88,35 @@ def _start():
         return
     with _worker_lock:
         if not (_worker and _worker.is_alive()):
+            _stop_event.clear()
             _worker = threading.Thread(target=_run, name="telemetry", daemon=True)
             _worker.start()
 
 
 def _run():
-    while True:
-        row = _q.get()
+    while not _stop_event.is_set():
         try:
-            # Check if connection still exists before writing (avoid segfault on test teardown)
-            if db.conn() is None:
-                _q.task_done()
-                continue
+            row = _q.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        try:
             db.x("""INSERT INTO traces(call_id,turn_id,ts,engine,model,prompt_version,system_prompt,messages_json,
                     context_json,raw_output_json,output_json,latency_ms,input_tokens,output_tokens,error,tier_tokens_json)
                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
             _purge()
         except Exception:
+            # Catch any DB errors (including closed connection during test teardown)
             pass
         finally:
             _q.task_done()
+
+
+def shutdown():
+    """Stop the telemetry worker thread gracefully before DB shutdown."""
+    global _worker
+    _stop_event.set()
+    if _worker:
+        _worker.join(timeout=1.0)
 
 
 def _purge():
