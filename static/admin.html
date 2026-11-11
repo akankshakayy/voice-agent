@@ -458,6 +458,25 @@
             border: 1px solid #93C5FD;
         }
 
+        /* File input styling */
+        input[type="file"] {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            border: 2px dashed var(--eko-secondary);
+            border-radius: 6px;
+            background: var(--eko-gray-50);
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--eko-gray-600);
+            transition: all 0.2s;
+        }
+
+        input[type="file"]:hover {
+            border-color: #C97A14;
+            background: #FDF8F3;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .container {
@@ -515,6 +534,7 @@
                 <div class="nav-item active" data-page="dcs">📍 Data Collectors</div>
                 <div class="nav-item" data-page="employees">👥 Employees</div>
                 <div class="nav-item" data-page="allowed-numbers">📞 Allowed Numbers</div>
+                <div class="nav-item" data-page="applicant-numbers">📱 Applicant Numbers</div>
             </div>
         </div>
 
@@ -574,6 +594,37 @@
                     </div>
                     <div class="pagination" id="numbersPagination"></div>
                 </div>
+
+                <!-- Applicant Numbers Page -->
+                <div class="page" id="applicant-numbers-page">
+                    <!-- Sync Status Banner -->
+                    <div id="syncStatusBanner" style="margin-bottom: 20px;">
+                        <div style="background: #DBEAFE; border: 1px solid #93C5FD; border-radius: 6px; padding: 15px; color: #1E40AF; font-size: 14px;">
+                            <span id="syncStatusText">Loading sync status...</span>
+                            <button class="btn-secondary" onclick="refreshApplicantStatus()" style="float: right; padding: 5px 12px; font-size: 12px;">🔄 Refresh</button>
+                        </div>
+                    </div>
+
+                    <!-- Search and Filter -->
+                    <div class="search-bar">
+                        <input type="text" class="search-input" id="applicantsSearch" placeholder="Search by phone or name...">
+                        <select id="applicantsStatus" style="flex: 0.3; min-width: 150px;">
+                            <option value="active">Active Only</option>
+                            <option value="inactive">Inactive Only</option>
+                            <option value="all">All</option>
+                        </select>
+                        <button class="btn-primary" onclick="openApplicantUploadModal()" style="flex: 0.3; min-width: 180px;">📤 Upload Excel</button>
+                    </div>
+
+                    <!-- Applicant Numbers Table -->
+                    <div class="table-container" id="applicantsTableContainer">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            Loading Applicant Numbers...
+                        </div>
+                    </div>
+                    <div class="pagination" id="applicantsPagination"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -604,6 +655,81 @@
         </div>
     </div>
 
+    <!-- Applicant Numbers Upload Modal -->
+    <div class="modal" id="applicantUploadModal">
+        <div class="modal-content">
+            <div class="modal-header">Upload Applicant Numbers</div>
+            <p style="color: var(--eko-gray-600); font-size: 14px; margin-bottom: 15px;">
+                Upload an Excel file with columns: <strong>phone</strong>, <strong>name</strong> (optional), <strong>description</strong> (optional)
+            </p>
+            <div id="uploadPreview" style="display: none; margin-bottom: 15px;">
+                <p style="font-weight: 600; margin-bottom: 10px;">Preview (First 5 rows):</p>
+                <div id="previewTable" style="background: var(--eko-gray-50); border: 1px solid var(--eko-gray-200); border-radius: 4px; padding: 10px; max-height: 200px; overflow-y: auto; font-size: 12px;"></div>
+            </div>
+            <div id="uploadProgress" style="display: none; margin-bottom: 15px;">
+                <p style="font-weight: 600; margin-bottom: 8px;">Upload Progress:</p>
+                <div style="background: var(--eko-gray-200); border-radius: 4px; overflow: hidden; height: 20px;">
+                    <div id="progressBar" style="background: var(--eko-secondary); height: 100%; width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <p id="progressText" style="font-size: 12px; color: var(--eko-gray-600); margin-top: 5px;">Ready to upload...</p>
+            </div>
+            <div id="uploadResults" style="display: none; margin-bottom: 15px;">
+                <p style="font-weight: 600; margin-bottom: 8px;">Results:</p>
+                <div id="resultsContent" style="background: var(--eko-gray-50); border: 1px solid var(--eko-gray-200); border-radius: 4px; padding: 12px; font-size: 13px; line-height: 1.6;"></div>
+            </div>
+            <form onsubmit="handleApplicantUpload(event)" style="display: none;" id="applicantUploadForm">
+                <div class="form-group">
+                    <label>Excel File *</label>
+                    <input type="file" id="applicantFile" accept=".xlsx,.xls" required style="padding: 10px; border: 2px dashed var(--eko-secondary); border-radius: 6px; cursor: pointer;">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeApplicantUploadModal()">Cancel</button>
+                    <button type="submit" class="btn-primary">Upload</button>
+                </div>
+            </form>
+            <div id="defaultUploadForm" class="form-group">
+                <label>Select Excel File *</label>
+                <input type="file" id="applicantFileInput" accept=".xlsx,.xls,.csv" onchange="handleApplicantFileSelect(event)">
+            </div>
+            <div class="modal-footer" id="defaultUploadFooter">
+                <button class="btn-secondary" onclick="closeApplicantUploadModal()">Cancel</button>
+                <button class="btn-primary" id="uploadApplicantBtn" onclick="submitApplicantUpload()" disabled>Upload</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Applicant Edit Modal -->
+    <div class="modal" id="applicantEditModal">
+        <div class="modal-content">
+            <div class="modal-header">Edit Applicant Number</div>
+            <form onsubmit="handleApplicantEdit(event)" id="applicantEditForm">
+                <div class="form-group">
+                    <label>Phone *</label>
+                    <input type="tel" id="editApplicantPhone" readonly style="background: var(--eko-gray-100); cursor: not-allowed;">
+                </div>
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="editApplicantName">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="editApplicantDescription">
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <select id="editApplicantStatus">
+                        <option value="1">Active</option>
+                        <option value="0">Inactive</option>
+                    </select>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeApplicantEditModal()">Cancel</button>
+                    <button type="submit" class="btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         // State management
         const state = {
@@ -613,14 +739,20 @@
             dcs: [],
             employees: [],
             allowedNumbers: [],
+            applicantNumbers: [],
+            applicantStatus: {},
+            applicantsPage: 1,
             dcsPage: 1,
             employeesPage: 1,
             numbersPage: 1,
             dcsSearch: '',
             employeesSearch: '',
             numbersSearch: '',
+            applicantsSearch: '',
+            applicantsStatusFilter: 'active',
             itemsPerPage: 25,
             pendingDelete: null,
+            applicantFileSelected: null,
         };
 
         const API_BASE = 'http://localhost:8000';
@@ -657,6 +789,18 @@
                 renderAllowedNumbersTable();
             });
 
+            document.getElementById('applicantsSearch')?.addEventListener('input', (e) => {
+                state.applicantsSearch = e.target.value.toLowerCase();
+                state.applicantsPage = 1;
+                renderApplicantNumbersTable();
+            });
+
+            document.getElementById('applicantsStatus')?.addEventListener('change', (e) => {
+                state.applicantsStatusFilter = e.target.value;
+                state.applicantsPage = 1;
+                renderApplicantNumbersTable();
+            });
+
             // Modal close on background click
             document.getElementById('formModal').addEventListener('click', (e) => {
                 if (e.target.id === 'formModal') closeModal();
@@ -685,7 +829,8 @@
             const titles = {
                 dcs: 'Data Collectors',
                 employees: 'Employees',
-                'allowed-numbers': 'Allowed Numbers'
+                'allowed-numbers': 'Allowed Numbers',
+                'applicant-numbers': 'Applicant Numbers'
             };
             document.getElementById('pageTitle').textContent = titles[page];
 
@@ -696,6 +841,7 @@
             if (page === 'dcs') loadDCs();
             else if (page === 'employees') loadEmployees();
             else if (page === 'allowed-numbers') loadAllowedNumbers();
+            else if (page === 'applicant-numbers') loadApplicantNumbers();
         }
 
         // API Calls
@@ -732,6 +878,42 @@
             } catch (err) {
                 showAlert(`Failed to load allowed numbers: ${err.message}`, 'error');
                 document.getElementById('numbersTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">⚠️</div><p>Failed to load data</p></div>';
+            }
+        }
+
+        async function loadApplicantNumbers() {
+            try {
+                // Load status first
+                await refreshApplicantStatus();
+
+                // Load numbers
+                const status = state.applicantsStatusFilter === 'all' ? 'all' : state.applicantsStatusFilter;
+                const search = state.applicantsSearch || '';
+                const page = state.applicantsPage;
+
+                const response = await fetch(`${API_BASE}/api/applicant-numbers?search=${encodeURIComponent(search)}&status=${status}&page=${page}&per_page=50`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const data = await response.json();
+                state.applicantNumbers = data.numbers || [];
+                renderApplicantNumbersTable(data);
+            } catch (err) {
+                showAlert(`Failed to load applicant numbers: ${err.message}`, 'error');
+                document.getElementById('applicantsTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">⚠️</div><p>Failed to load data</p></div>';
+            }
+        }
+
+        async function refreshApplicantStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/api/applicant-numbers/status`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                state.applicantStatus = await response.json();
+
+                const { total_active, total_inactive, last_sync_at, sync_source } = state.applicantStatus;
+                const lastSync = last_sync_at ? new Date(last_sync_at * 1000).toLocaleString() : 'Never';
+                document.getElementById('syncStatusText').textContent = `Last synced: ${lastSync} via ${sync_source} • Total applicants: ${total_active} active, ${total_inactive} inactive`;
+            } catch (err) {
+                document.getElementById('syncStatusText').textContent = `Failed to load status: ${err.message}`;
             }
         }
 
@@ -905,6 +1087,60 @@
                 state.numbersPage = p;
                 renderAllowedNumbersTable();
             });
+        }
+
+        function renderApplicantNumbersTable(data) {
+            if (!state.applicantNumbers || state.applicantNumbers.length === 0) {
+                document.getElementById('applicantsTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No applicant numbers found</p></div>';
+                document.getElementById('applicantsPagination').innerHTML = '';
+                return;
+            }
+
+            const html = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Phone</th>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th>Status</th>
+                            <th>Added By</th>
+                            <th>Date Added</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${state.applicantNumbers.map(num => {
+                            const createdAt = num.created_at ? new Date(num.created_at * 1000).toLocaleDateString() : '-';
+                            return `
+                            <tr>
+                                <td><strong>${num.phone}</strong></td>
+                                <td>${num.name || '-'}</td>
+                                <td>${num.description || '-'}</td>
+                                <td><span class="status-badge status-${num.active ? 'active' : 'inactive'}">${num.active ? 'Active' : 'Inactive'}</span></td>
+                                <td>${num.created_by || '-'}</td>
+                                <td>${createdAt}</td>
+                                <td>
+                                    <div class="actions">
+                                        <button class="btn-sm btn-edit" onclick="editApplicantNumber(${num.id})">Edit</button>
+                                        <button class="btn-sm btn-delete" onclick="deleteApplicantNumber(${num.id}, '${num.phone}')">Delete</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+            document.getElementById('applicantsTableContainer').innerHTML = html;
+
+            // Pagination
+            if (data && data.total_pages) {
+                renderPagination('applicantsPagination', data.page, data.total_pages, (p) => {
+                    state.applicantsPage = p;
+                    loadApplicantNumbers();
+                });
+            }
         }
 
         function renderPagination(containerId, current, total, callback) {
@@ -1186,6 +1422,12 @@
             document.getElementById('confirmModal').classList.add('active');
         }
 
+        function deleteApplicantNumber(id, phone) {
+            state.pendingDelete = { id, endpoint: '/api/applicant-numbers', type: 'applicants' };
+            document.getElementById('confirmMessage').textContent = `Delete applicant "${phone}"? This action cannot be undone.`;
+            document.getElementById('confirmModal').classList.add('active');
+        }
+
         async function confirmDelete() {
             const { id, endpoint, type } = state.pendingDelete;
 
@@ -1205,6 +1447,7 @@
                 if (type === 'dcs') loadDCs();
                 else if (type === 'employees') loadEmployees();
                 else if (type === 'numbers') loadAllowedNumbers();
+                else if (type === 'applicants') loadApplicantNumbers();
             } catch (err) {
                 showAlert(`Error: ${err.message}`, 'error');
             }
@@ -1213,6 +1456,146 @@
         function closeConfirm() {
             document.getElementById('confirmModal').classList.remove('active');
             state.pendingDelete = null;
+        }
+
+        // Applicant Numbers - Upload Modal
+        function openApplicantUploadModal() {
+            document.getElementById('applicantUploadModal').classList.add('active');
+            document.getElementById('applicantFileInput').value = '';
+            document.getElementById('uploadPreview').style.display = 'none';
+            document.getElementById('uploadProgress').style.display = 'none';
+            document.getElementById('uploadResults').style.display = 'none';
+            state.applicantFileSelected = null;
+        }
+
+        function closeApplicantUploadModal() {
+            document.getElementById('applicantUploadModal').classList.remove('active');
+            state.applicantFileSelected = null;
+        }
+
+        function handleApplicantFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) {
+                state.applicantFileSelected = null;
+                document.getElementById('uploadApplicantBtn').disabled = true;
+                return;
+            }
+
+            if (!file.name.match(/\.(xlsx|xls|csv)$/i)) {
+                showAlert('Only Excel files (.xlsx, .xls, .csv) are supported', 'error');
+                event.target.value = '';
+                state.applicantFileSelected = null;
+                return;
+            }
+
+            state.applicantFileSelected = file;
+            document.getElementById('uploadApplicantBtn').disabled = false;
+        }
+
+        async function submitApplicantUpload() {
+            if (!state.applicantFileSelected) {
+                showAlert('Please select a file', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', state.applicantFileSelected);
+
+            document.getElementById('uploadProgress').style.display = 'block';
+            document.getElementById('progressText').textContent = 'Uploading...';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/bulk-load/applicant-numbers`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+
+                const result = await response.json();
+                document.getElementById('uploadProgress').style.display = 'none';
+                document.getElementById('uploadResults').style.display = 'block';
+
+                let resultsHtml = `
+                    <div style="font-weight: 600; color: var(--eko-gray-700);">
+                        Success: ${result.success} | Skipped: ${result.skipped} | Errors: ${result.errors}
+                    </div>
+                `;
+
+                if (result.error_details && result.error_details.length > 0) {
+                    resultsHtml += '<div style="margin-top: 10px; color: var(--eko-danger);"><strong>Errors:</strong><br>';
+                    result.error_details.forEach(err => {
+                        resultsHtml += `Row ${err.row}: ${err.message}<br>`;
+                    });
+                    resultsHtml += '</div>';
+                }
+
+                document.getElementById('resultsContent').innerHTML = resultsHtml;
+
+                setTimeout(() => {
+                    closeApplicantUploadModal();
+                    showAlert('Upload completed successfully!', 'success');
+                    loadApplicantNumbers();
+                }, 2000);
+            } catch (err) {
+                document.getElementById('uploadProgress').style.display = 'none';
+                showAlert(`Upload failed: ${err.message}`, 'error');
+            }
+        }
+
+        // Applicant Numbers - Edit
+        function editApplicantNumber(id) {
+            const num = state.applicantNumbers.find(n => n.id === id);
+            if (!num) {
+                showAlert('Number not found', 'error');
+                return;
+            }
+
+            document.getElementById('editApplicantPhone').value = num.phone;
+            document.getElementById('editApplicantName').value = num.name || '';
+            document.getElementById('editApplicantDescription').value = num.description || '';
+            document.getElementById('editApplicantStatus').value = num.active ? '1' : '0';
+
+            state.editingApplicantId = id;
+            document.getElementById('applicantEditModal').classList.add('active');
+        }
+
+        function closeApplicantEditModal() {
+            document.getElementById('applicantEditModal').classList.remove('active');
+            state.editingApplicantId = null;
+        }
+
+        async function handleApplicantEdit(event) {
+            event.preventDefault();
+
+            const data = {
+                phone: document.getElementById('editApplicantPhone').value,
+                name: document.getElementById('editApplicantName').value || null,
+                description: document.getElementById('editApplicantDescription').value || null,
+                active: parseInt(document.getElementById('editApplicantStatus').value)
+            };
+
+            try {
+                const response = await fetch(`${API_BASE}/api/applicant-numbers/${state.editingApplicantId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+
+                showAlert('Updated successfully!', 'success');
+                closeApplicantEditModal();
+                loadApplicantNumbers();
+            } catch (err) {
+                showAlert(`Error: ${err.message}`, 'error');
+            }
         }
 
         // Alerts

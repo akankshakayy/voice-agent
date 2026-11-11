@@ -331,3 +331,92 @@ def bulk_load_employees(file_content: bytes, created_by: str) -> Dict:
             result.add_error(row['_row_num'], f"Database error: {str(e)}")
 
     return result.to_dict()
+
+
+def validate_applicant_number_row(row: Dict, existing_phones: set) -> Tuple[bool, str, Dict]:
+    """
+    Validate Applicant Number row from Excel.
+    Returns: (is_valid, error_message, cleaned_data)
+    """
+    cleaned = {}
+    row_num = row.get('_row_num', '?')
+
+    # Phone (required, unique)
+    valid, phone_or_error = validate_phone(row.get('phone'))
+    if not valid:
+        return False, f"Row {row_num}: {phone_or_error}", {}
+
+    if phone_or_error in existing_phones:
+        return False, f"Row {row_num}: Phone {phone_or_error} already exists", {}
+
+    cleaned['phone'] = phone_or_error
+
+    # Name (optional but recommended)
+    name = str(row.get('name', '')).strip() if row.get('name') else ''
+    if name and len(name) > 255:
+        return False, f"Row {row_num}: Name too long (max 255)", {}
+    cleaned['name'] = name or None
+
+    # Description (optional)
+    description = str(row.get('description', '')).strip() if row.get('description') else ''
+    if description and len(description) > 500:
+        return False, f"Row {row_num}: Description too long (max 500)", {}
+    cleaned['description'] = description or None
+
+    return True, None, cleaned
+
+
+def bulk_load_applicant_numbers(file_content: bytes, created_by: str) -> Dict:
+    """
+    Bulk load Applicant Numbers from Excel file.
+    Returns: results dict with success/error counts
+    """
+    result = BulkLoadResult()
+
+    # Parse Excel
+    rows, parse_error = parse_excel_file(file_content)
+    if parse_error:
+        result.add_error(0, parse_error)
+        return result.to_dict()
+
+    if not rows:
+        result.add_error(0, "No data rows found in Excel file")
+        return result.to_dict()
+
+    # Get existing phones
+    existing = db.q("SELECT phone FROM autogmap_numbers WHERE active=1")
+    existing_phones = {row['phone'] for row in existing}
+
+    # Validate and create
+    for row in rows:
+        is_valid, error, cleaned = validate_applicant_number_row(row, existing_phones)
+
+        if not is_valid:
+            result.add_error(row['_row_num'], error)
+            continue
+
+        try:
+            # Check again (race condition)
+            exists = db.q("SELECT id FROM autogmap_numbers WHERE phone=?", (cleaned['phone'],), one=True)
+            if exists:
+                result.add_error(row['_row_num'], f"Phone {cleaned['phone']} already exists")
+                result.add_skip()
+                continue
+
+            # Create
+            db.execute(
+                "INSERT INTO autogmap_numbers (phone, name, description, created_by, created_at, active) "
+                "VALUES (?, ?, ?, ?, ?, 1)",
+                (cleaned['phone'], cleaned['name'], cleaned['description'], created_by, time.time())
+            )
+
+            # Get new ID
+            new_num = db.q("SELECT id FROM autogmap_numbers WHERE phone=?", (cleaned['phone'],), one=True)
+            if new_num:
+                result.add_success(new_num['id'])
+                existing_phones.add(cleaned['phone'])
+
+        except Exception as e:
+            result.add_error(row['_row_num'], f"Database error: {str(e)}")
+
+    return result.to_dict()

@@ -413,6 +413,17 @@ def conn() -> sqlite3.Connection:
             _conn.commit()
         except Exception as e:
             pass  # Migrations may already be applied or table doesn't exist
+        # Phase 7b: Applicant Numbers admin management
+        try:
+            _add_columns(_conn, "autogmap_numbers", {
+                "description": "TEXT",                 # optional notes about the applicant
+                "created_by": "TEXT",                  # who uploaded/added this number
+                "created_at": "REAL"                   # when it was added to the system
+            })
+            _conn.execute("CREATE INDEX IF NOT EXISTS idx_autogmap_created ON autogmap_numbers(created_at DESC)")
+            _conn.commit()
+        except Exception as e:
+            pass  # Migrations may already be applied or table doesn't exist
     return _conn
 
 

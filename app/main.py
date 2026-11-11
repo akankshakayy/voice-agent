@@ -87,7 +87,7 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
                 "/api/recordings/cleanup"}
-PUBLIC_PREFIXES = ("/static/", "/api/dcs", "/api/employees", "/api/allowed-numbers", "/api/bulk-load")  # Dev: admin APIs without auth
+PUBLIC_PREFIXES = ("/static/", "/api/dcs", "/api/employees", "/api/allowed-numbers", "/api/applicant-numbers", "/api/bulk-load")  # Dev: admin APIs without auth
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
 PAGE_ROLES = {"/": ("admin", "ops", "rm"), "/call": STAFF, "/ops": STAFF, "/harness": STAFF, "/rm": ("admin", "ops", "rm"),
@@ -1394,6 +1394,156 @@ def update_employee(employee_id: int, body: EmployeeBody):
     fields["updated_at"] = time.time()
     db.update("employees", employee_id, **fields)
     return db.q("SELECT * FROM employees WHERE id=?", (employee_id,), one=True)
+
+
+# ------------------------------------------------------------------ Applicant Numbers Management (Phase 7b)
+@app.get("/api/applicant-numbers/status", dependencies=[Depends(allow("admin"))])
+def applicant_numbers_status():
+    """Get sync status and statistics for applicant numbers."""
+    stats = db.q("""
+        SELECT
+            COUNT(CASE WHEN active=1 THEN 1 END) as total_active,
+            COUNT(CASE WHEN active=0 THEN 1 END) as total_inactive,
+            MAX(synced_at) as last_sync_api,
+            MAX(created_at) as last_upload,
+            MAX(CASE WHEN created_by IS NOT NULL THEN created_at END) as last_manual_add
+        FROM autogmap_numbers
+    """, one=True)
+
+    # Determine sync source based on most recent update
+    last_sync_api = stats.get('last_sync_api') or 0
+    last_upload = stats.get('last_upload') or 0
+    sync_source = "api" if last_sync_api > last_upload else "excel"
+
+    return {
+        "total_active": stats.get('total_active', 0),
+        "total_inactive": stats.get('total_inactive', 0),
+        "last_sync_at": last_sync_api or last_upload or None,
+        "sync_source": sync_source
+    }
+
+
+@app.get("/api/applicant-numbers", dependencies=[Depends(allow("admin"))])
+def list_applicant_numbers(
+    search: str | None = None,
+    status: str = "active",
+    page: int = 1,
+    per_page: int = 50
+):
+    """List applicant numbers with pagination and filtering.
+
+    Args:
+        search: Search by phone or name
+        status: Filter by 'active', 'inactive', or 'all'
+        page: Page number (1-indexed)
+        per_page: Items per page
+    """
+    # Build query
+    where_clauses = []
+    params = []
+
+    if status == "active":
+        where_clauses.append("active=1")
+    elif status == "inactive":
+        where_clauses.append("active=0")
+
+    if search:
+        where_clauses.append("(phone LIKE ? OR name LIKE ?)")
+        search_term = f"%{search}%"
+        params.extend([search_term, search_term])
+
+    where_clause = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+    # Get total count
+    count_sql = f"SELECT COUNT(*) as cnt FROM autogmap_numbers{where_clause}"
+    count_result = db.q(count_sql, params, one=True)
+    total = count_result.get('cnt', 0) if count_result else 0
+
+    # Get paginated results
+    offset = (page - 1) * per_page
+    data_sql = f"""
+        SELECT id, phone, name, description, active, created_by, created_at, synced_at
+        FROM autogmap_numbers
+        {where_clause}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """
+    data_params = params + [per_page, offset]
+    records = db.q(data_sql, data_params)
+
+    return {
+        "numbers": records,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page
+    }
+
+
+class ApplicantNumberBody(BaseModel):
+    phone: str
+    name: str | None = None
+    description: str | None = None
+    active: int = 1
+
+
+@app.post("/api/applicant-numbers", dependencies=[Depends(allow("admin"))])
+def create_applicant_number(body: ApplicantNumberBody, actor=Depends(allow("admin"))):
+    """Create a single applicant number."""
+    try:
+        num_id = db.x("""
+            INSERT INTO autogmap_numbers(phone, name, description, created_by, created_at, active)
+            VALUES(?, ?, ?, ?, ?, ?)
+        """, (body.phone, body.name, body.description, actor.get("email"), time.time(), body.active))
+        return {"id": num_id, "phone": body.phone}
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(400, f"Phone already exists: {e}")
+
+
+@app.put("/api/applicant-numbers/{number_id}", dependencies=[Depends(allow("admin"))])
+def update_applicant_number(number_id: int, body: ApplicantNumberBody):
+    """Update an applicant number."""
+    # Check if exists
+    if not db.q("SELECT id FROM autogmap_numbers WHERE id=?", (number_id,), one=True):
+        raise HTTPException(404, "Number not found")
+
+    # Build update fields
+    fields = {}
+    if body.name is not None:
+        fields["name"] = body.name
+    if body.description is not None:
+        fields["description"] = body.description
+    if body.active is not None:
+        fields["active"] = body.active
+
+    if fields:
+        db.update("autogmap_numbers", number_id, **fields)
+
+    return db.q("SELECT * FROM autogmap_numbers WHERE id=?", (number_id,), one=True)
+
+
+@app.delete("/api/applicant-numbers/{number_id}", dependencies=[Depends(allow("admin"))])
+def delete_applicant_number(number_id: int):
+    """Soft delete an applicant number (mark inactive)."""
+    if not db.q("SELECT id FROM autogmap_numbers WHERE id=?", (number_id,), one=True):
+        raise HTTPException(404, "Number not found")
+
+    db.update("autogmap_numbers", number_id, active=0)
+    return {"ok": True}
+
+
+@app.post("/api/bulk-load/applicant-numbers", dependencies=[Depends(allow("admin"))])
+async def bulk_load_applicant_numbers_endpoint(file: UploadFile = File(...), actor=Depends(allow("admin"))):
+    """Bulk upload applicant numbers from Excel file."""
+    if not file.filename.lower().endswith(('.xlsx', '.xls', '.csv')):
+        raise HTTPException(400, "Only Excel files (.xlsx, .xls) are supported")
+
+    try:
+        content = await file.read()
+        result = bulk_load.bulk_load_applicant_numbers(content, actor.get("email", "unknown"))
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {str(e)}")
 
 
 @app.get("/api/mansi/recordings")
