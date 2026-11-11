@@ -131,6 +131,13 @@ CREATE TABLE IF NOT EXISTS recordings (      -- real RM-CSP call recordings from
     prachi_api_sent_at REAL, prachi_request_id TEXT,
     mansi_api_sent_at REAL, mansi_request_id TEXT
 );
+CREATE TABLE IF NOT EXISTS prachi_submissions (  -- DC recordings submitted to Prachi API (Phase 7, app/main.py)
+    id INTEGER PRIMARY KEY, recording_id INTEGER UNIQUE, dc_id INTEGER, dc_name TEXT,
+    dc_phone TEXT, caller_number TEXT, recipient_number TEXT, call_direction TEXT,
+    duration_sec INTEGER, uploaded_at TEXT, transcript TEXT, transcript_json TEXT,
+    file_path TEXT, status TEXT, attempts INTEGER,
+    prachi_request_id TEXT, received_at REAL, processed_at REAL, error_message TEXT
+);
 CREATE TABLE IF NOT EXISTS api_keys (         -- other systems calling the API (app/integrations.py)
     id INTEGER PRIMARY KEY, key_hash TEXT UNIQUE, name TEXT, role TEXT, created_by TEXT,
     created_at REAL, last_used_at REAL, revoked_at REAL
