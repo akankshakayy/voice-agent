@@ -350,7 +350,7 @@ def send_to_prachi_batch(max_batch: int = 50) -> dict:
 
 
 def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: str, duration_sec: int) -> None:
-    """Queue a recording for AutoGMap upload. Non-blocking; upload happens in background.
+    """Queue a recording for AutoGMap upload. Non-blocking; uses rate-limited queue (max 2 req/sec).
 
     Args:
         rec_id: Recording ID
@@ -368,78 +368,38 @@ def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: st
             db.update("recordings", rec_id, autogmap_status="not_in_applicants")
             return
 
-        # Queue for background upload
-        db.update("recordings", rec_id, autogmap_status="pending")
-        log.info(f"Recording {rec_id} queued for AutoGMap upload (phone={phone})")
-
-        # Spawn background upload task
-        threading.Thread(
-            target=_upload_to_autogmap_background,
-            args=(rec_id, file_path, phone, direction, duration_sec),
-            daemon=True,
-            name=f"autogmap-upload-{rec_id}"
-        ).start()
-
-    except Exception as e:
-        log.error(f"Error queuing AutoGMap upload for recording {rec_id}: {e}")
-        db.update("recordings", rec_id, autogmap_status="failed", autogmap_error=str(e)[:500])
-
-
-def _upload_to_autogmap_background(rec_id: int, file_path: str, phone: str, direction: str, duration_sec: int) -> None:
-    """Background worker: upload recording to AutoGMap with retries.
-
-    Args:
-        rec_id: Recording ID
-        file_path: Path to audio file (relative to storage_dir)
-        phone: Phone number
-        direction: 'incoming' or 'outgoing'
-        duration_sec: Call duration in seconds
-    """
-    try:
-        from . import autogmap
-        import asyncio
-
         # Get full path
         full_path = os.path.join(storage_dir(), file_path)
 
-        log.info(f"Starting AutoGMap upload for recording {rec_id}: {phone}")
+        # Define database update function
+        def db_update_fn(success: bool, status: str, data: dict) -> None:
+            """Update recording status in database."""
+            if success:
+                db.update("recordings", rec_id,
+                         autogmap_status="uploaded",
+                         autogmap_sent_at=time.time(),
+                         autogmap_attempts=data.get("attempts", 1))
+                log.info(f"Recording {rec_id} successfully uploaded to AutoGMap")
+            else:
+                db.update("recordings", rec_id,
+                         autogmap_status="failed",
+                         autogmap_error=data.get("error", f"Upload failed: {status}"),
+                         autogmap_attempts=data.get("attempts", 1))
+                log.warning(f"Recording {rec_id} failed to upload to AutoGMap: {status}")
 
-        # Create client and retry manager
-        try:
-            client = autogmap.AutoGMapClient()
-        except autogmap.AutoGMapConfigError as e:
-            log.error(f"AutoGMap not configured: {e}")
-            db.update("recordings", rec_id, autogmap_status="failed", autogmap_error="AutoGMap not configured")
-            return
+        # Queue for rate-limited background upload
+        db.update("recordings", rec_id, autogmap_status="pending")
+        queued = autogmap.queue_upload(rec_id, full_path, phone, direction, duration_sec, db_update_fn)
 
-        retry_manager = autogmap.UploadRetryManager(client)
-
-        # Run async upload with retries
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            success, status, data = loop.run_until_complete(
-                retry_manager.upload_with_retry(full_path, phone, direction, duration_sec)
-            )
-        finally:
-            loop.close()
-
-        # Update recording status
-        if success:
-            db.update("recordings", rec_id,
-                     autogmap_status="uploaded",
-                     autogmap_sent_at=time.time(),
-                     autogmap_attempts=data.get("attempts", 1))
-            log.info(f"Recording {rec_id} successfully uploaded to AutoGMap")
+        if queued:
+            log.info(f"Recording {rec_id} queued for AutoGMap upload (phone={phone})")
         else:
-            db.update("recordings", rec_id,
-                     autogmap_status="failed",
-                     autogmap_error=data.get("error", f"Upload failed: {status}"),
-                     autogmap_attempts=data.get("attempts", 1))
-            log.warning(f"Recording {rec_id} failed to upload to AutoGMap: {status}")
+            log.error(f"Failed to queue recording {rec_id} for AutoGMap upload; queue may be full")
+            db.update("recordings", rec_id, autogmap_status="failed",
+                     autogmap_error="Upload queue full; retry later")
 
     except Exception as e:
-        log.exception(f"AutoGMap upload background worker failed for recording {rec_id}")
+        log.error(f"Error queuing AutoGMap upload for recording {rec_id}: {e}")
         db.update("recordings", rec_id, autogmap_status="failed", autogmap_error=str(e)[:500])
 
 

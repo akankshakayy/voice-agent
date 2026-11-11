@@ -22,7 +22,9 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from queue import Queue
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -42,6 +44,8 @@ AUTOGMAP_UPLOAD_RETRY_BACKOFF = [
     int(x.strip()) for x in os.environ.get("AUTOGMAP_UPLOAD_RETRY_BACKOFF", "60,300,900").split(",")
 ]
 AUTOGMAP_UPLOAD_TIMEOUT_SEC = int(os.environ.get("AUTOGMAP_UPLOAD_TIMEOUT_SECONDS", "60"))
+AUTOGMAP_UPLOAD_QUEUE_SIZE = int(os.environ.get("AUTOGMAP_UPLOAD_QUEUE_SIZE", "1000"))
+AUTOGMAP_UPLOAD_MAX_WORKERS = int(os.environ.get("AUTOGMAP_UPLOAD_MAX_WORKERS", "2"))  # Mansi's 2 req/sec limit
 
 # Global sync state
 _sync_lock = threading.RLock()
@@ -53,6 +57,17 @@ _sync_stats = {
     "sync_failures": 0,
     "failure_streak": 0,
     "numbers_count": 0,
+}
+
+# Global upload queue and worker pool
+_upload_queue: Optional[Queue] = None
+_upload_executor: Optional[ThreadPoolExecutor] = None
+_upload_stats = {
+    "queued": 0,
+    "processed": 0,
+    "queue_peak": 0,
+    "queue_full_rejections": 0,
+    "last_queued_at": None,
 }
 
 
@@ -453,6 +468,67 @@ class UploadRetryManager:
             return success, status, data
 
 
+class UploadQueueWorker:
+    """Worker for processing queued uploads at rate-limited pace (2 req/sec max)."""
+
+    def __init__(self, client: AutoGMapClient, retry_manager: UploadRetryManager):
+        """Initialize worker.
+
+        Args:
+            client: AutoGMapClient instance
+            retry_manager: UploadRetryManager for retry logic
+        """
+        self.client = client
+        self.retry_manager = retry_manager
+
+    def process_upload(self, upload_job: dict) -> None:
+        """Process a single upload job from the queue.
+
+        Args:
+            upload_job: dict with keys: rec_id, file_path, phone, direction, duration_sec, db_update_fn
+        """
+        import asyncio
+        import time
+
+        rec_id = upload_job["rec_id"]
+        file_path = upload_job["file_path"]
+        phone = upload_job["phone"]
+        direction = upload_job["direction"]
+        duration_sec = upload_job["duration_sec"]
+        db_update_fn = upload_job["db_update_fn"]
+
+        try:
+            log.debug(f"Processing upload from queue: rec_id={rec_id}, phone={phone}")
+
+            # Run async upload with retries
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                success, status, data = loop.run_until_complete(
+                    self.retry_manager.upload_with_retry(
+                        file_path, phone, direction, duration_sec
+                    )
+                )
+            finally:
+                loop.close()
+
+            # Call the database update function with results
+            db_update_fn(success, status, data)
+
+            # Track stats
+            with _sync_lock:
+                _upload_stats["processed"] += 1
+
+            if success:
+                log.info(f"Upload processed successfully from queue: rec_id={rec_id}")
+            else:
+                log.warning(f"Upload failed from queue: rec_id={rec_id}, status={status}")
+
+        except Exception as e:
+            log.exception(f"Error processing upload from queue: rec_id={rec_id}")
+            db_update_fn(False, "worker_error", {"error": str(e)})
+
+
 class AutoGMapSync:
     """Scheduler for syncing AutoGMap numbers periodically."""
 
@@ -654,6 +730,101 @@ def load_cached_numbers() -> None:
         log.error("Error loading cached numbers: %s", e)
 
 
+def init_upload_queue() -> None:
+    """Initialize the upload queue and worker thread pool on startup.
+
+    Call once during app startup to prepare for rate-limited uploads.
+    """
+    global _upload_queue, _upload_executor
+
+    if _upload_queue is not None:
+        log.warning("Upload queue already initialized")
+        return
+
+    try:
+        _upload_queue = Queue(maxsize=AUTOGMAP_UPLOAD_QUEUE_SIZE)
+        _upload_executor = ThreadPoolExecutor(
+            max_workers=AUTOGMAP_UPLOAD_MAX_WORKERS,
+            thread_name_prefix="autogmap-upload-worker"
+        )
+        log.info(
+            "AutoGMap upload queue initialized: max_workers=%d, queue_size=%d",
+            AUTOGMAP_UPLOAD_MAX_WORKERS,
+            AUTOGMAP_UPLOAD_QUEUE_SIZE
+        )
+    except Exception as e:
+        log.error("Failed to initialize upload queue: %s", e)
+        _upload_queue = None
+        _upload_executor = None
+
+
+def queue_upload(
+    rec_id: int,
+    file_path: str,
+    phone: str,
+    direction: str,
+    duration_sec: int,
+    db_update_fn,
+) -> bool:
+    """Queue a recording for rate-limited upload to AutoGMap.
+
+    Args:
+        rec_id: Recording ID
+        file_path: Path to audio file
+        phone: Phone number
+        direction: Call direction ('in' or 'out')
+        duration_sec: Call duration in seconds
+        db_update_fn: Callable(success, status, data) to update database
+
+    Returns:
+        bool: True if queued successfully, False if queue is full
+    """
+    global _upload_queue
+
+    if _upload_queue is None:
+        log.error("Upload queue not initialized; cannot queue upload for rec_id=%d", rec_id)
+        return False
+
+    upload_job = {
+        "rec_id": rec_id,
+        "file_path": file_path,
+        "phone": phone,
+        "direction": direction,
+        "duration_sec": duration_sec,
+        "db_update_fn": db_update_fn,
+    }
+
+    try:
+        # Non-blocking put with immediate check for full queue
+        _upload_queue.put_nowait(upload_job)
+
+        with _sync_lock:
+            _upload_stats["queued"] += 1
+            _upload_stats["last_queued_at"] = datetime.now(tz=ZoneInfo("UTC")).isoformat()
+            queue_depth = _upload_queue.qsize()
+            if queue_depth > _upload_stats["queue_peak"]:
+                _upload_stats["queue_peak"] = queue_depth
+
+        log.info(
+            "Recording queued for AutoGMap upload: rec_id=%d, phone=%s, queue_depth=%d",
+            rec_id,
+            phone,
+            queue_depth,
+        )
+        return True
+
+    except Exception as e:
+        with _sync_lock:
+            _upload_stats["queue_full_rejections"] += 1
+
+        log.error(
+            "Failed to queue upload for rec_id=%d: %s (queue may be full)",
+            rec_id,
+            e,
+        )
+        return False
+
+
 def sync_loop(stop: threading.Event) -> None:
     """Background thread: sync numbers every AUTOGMAP_SYNC_INTERVAL_MIN minutes.
 
@@ -690,6 +861,68 @@ def sync_loop(stop: threading.Event) -> None:
 
         # Wait for next sync interval (or until stop signal)
         stop.wait(AUTOGMAP_SYNC_INTERVAL_MIN * 60)
+
+
+def upload_queue_worker(stop: threading.Event) -> None:
+    """Background thread: process queued uploads with rate limiting (max 2 concurrent).
+
+    Args:
+        stop: Threading event to signal shutdown
+    """
+    global _upload_queue, _upload_executor
+
+    if not AUTOGMAP_ENABLED:
+        log.info("AutoGMap is disabled; upload worker not starting")
+        return
+
+    if _upload_queue is None:
+        log.error("Upload queue not initialized; cannot start upload worker")
+        return
+
+    log.info("AutoGMap upload worker starting (max_workers=%d)", AUTOGMAP_UPLOAD_MAX_WORKERS)
+
+    try:
+        client = AutoGMapClient()
+        retry_manager = UploadRetryManager(client)
+        worker = UploadQueueWorker(client, retry_manager)
+    except AutoGMapConfigError as e:
+        log.error("Cannot start upload worker: %s", e)
+        return
+
+    while not stop.is_set():
+        try:
+            # Get next job from queue (blocking, 1 sec timeout to check stop signal)
+            from queue import Empty
+            try:
+                upload_job = _upload_queue.get(timeout=1)
+            except Empty:
+                # Queue timeout (no job available), continue waiting
+                continue
+
+            log.debug(f"Dequeued upload job: rec_id={upload_job['rec_id']}")
+
+            # Submit to thread pool executor
+            _upload_executor.submit(worker.process_upload, upload_job)
+
+        except Exception:
+            log.exception("Error in upload worker loop")
+
+    log.info("AutoGMap upload worker shutting down")
+
+
+def get_upload_queue_stats() -> dict:
+    """Get current queue statistics.
+
+    Returns:
+        dict: Stats with keys: queued, processed, queue_peak, queue_full_rejections, last_queued_at, current_queue_depth
+    """
+    with _sync_lock:
+        stats = dict(_upload_stats)
+        if _upload_queue is not None:
+            stats["current_queue_depth"] = _upload_queue.qsize()
+        else:
+            stats["current_queue_depth"] = 0
+    return stats
 
 
 # Utility functions for database access

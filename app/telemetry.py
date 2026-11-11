@@ -95,6 +95,10 @@ def _run():
     while True:
         row = _q.get()
         try:
+            # Check if connection still exists before writing (avoid segfault on test teardown)
+            if db.conn() is None:
+                _q.task_done()
+                continue
             db.x("""INSERT INTO traces(call_id,turn_id,ts,engine,model,prompt_version,system_prompt,messages_json,
                     context_json,raw_output_json,output_json,latency_ms,input_tokens,output_tokens,error,tier_tokens_json)
                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)

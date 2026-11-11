@@ -52,11 +52,15 @@ async def lifespan(_app):
     except Exception as e:
         log.error("Bootstrap failed: %s", e)
 
+    # Initialize AutoGMap upload queue for rate-limited uploads (max 2 req/sec)
+    autogmap.init_upload_queue()
+
     stop = threading.Event()
     threading.Thread(target=_reap_stale_calls, args=(stop,), daemon=True, name="call-reaper").start()
     threading.Thread(target=recordings.processing_loop, args=(stop,), daemon=True, name="recordings").start()
     threading.Thread(target=integrations.delivery_loop, args=(stop,), daemon=True, name="webhooks").start()
     threading.Thread(target=autogmap.sync_loop, args=(stop,), daemon=True, name="autogmap-sync").start()
+    threading.Thread(target=autogmap.upload_queue_worker, args=(stop,), daemon=True, name="autogmap-upload-worker").start()
     threading.Thread(target=prachi_sync.sync_loop, args=(stop,), daemon=True, name="prachi-sync").start()
     yield
     stop.set()
@@ -2154,18 +2158,31 @@ def prachi_receive_recording(req: PrachiRecordingRequest, request: Request):
 # ------------------------------------------------------------------ AutoGMap (Phase 7a: Numbers Sync)
 @app.get("/api/autogmap/status", dependencies=[Depends(allow("admin", "ops"))])
 def autogmap_status():
-    """Get AutoGMap integration status: last sync, numbers count, success rate."""
-    stats = autogmap._get_sync().get_stats()
+    """Get AutoGMap integration status: sync stats, queue depth, upload metrics."""
+    sync_stats = autogmap._get_sync().get_stats()
+    queue_stats = autogmap.get_upload_queue_stats()
 
     return {
         "enabled": autogmap.AUTOGMAP_ENABLED,
-        "last_sync": stats.get("last_sync"),
-        "last_sync_success": stats.get("last_sync_success"),
-        "numbers_count": stats.get("numbers_count", 0),
-        "sync_count": stats.get("sync_count", 0),
-        "sync_failures": stats.get("sync_failures", 0),
-        "failure_streak": stats.get("failure_streak", 0),
-        "status": "OK" if stats.get("failure_streak", 0) < 3 else "ERROR",
+        "sync": {
+            "last_sync": sync_stats.get("last_sync"),
+            "last_sync_success": sync_stats.get("last_sync_success"),
+            "numbers_count": sync_stats.get("numbers_count", 0),
+            "sync_count": sync_stats.get("sync_count", 0),
+            "sync_failures": sync_stats.get("sync_failures", 0),
+            "failure_streak": sync_stats.get("failure_streak", 0),
+        },
+        "upload_queue": {
+            "max_workers": autogmap.AUTOGMAP_UPLOAD_MAX_WORKERS,
+            "max_size": autogmap.AUTOGMAP_UPLOAD_QUEUE_SIZE,
+            "current_depth": queue_stats.get("current_queue_depth", 0),
+            "queued_total": queue_stats.get("queued", 0),
+            "processed_total": queue_stats.get("processed", 0),
+            "queue_peak": queue_stats.get("queue_peak", 0),
+            "rejections": queue_stats.get("queue_full_rejections", 0),
+            "last_queued_at": queue_stats.get("last_queued_at"),
+        },
+        "status": "OK" if sync_stats.get("failure_streak", 0) < 3 else "ERROR",
     }
 
 
