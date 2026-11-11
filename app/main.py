@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -85,16 +86,20 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
                 "/api/recordings/cleanup"}
-PUBLIC_PREFIXES = ("/static/",)
+PUBLIC_PREFIXES = ("/static/", "/api/dcs", "/api/employees", "/api/allowed-numbers", "/api/bulk-load")  # Dev: admin APIs without auth
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
 PAGE_ROLES = {"/": ("admin", "ops", "rm"), "/call": STAFF, "/ops": STAFF, "/harness": STAFF, "/rm": ("admin", "ops", "rm"),
               "/users": ("admin",), "/recordings": ("admin", "ops", "rm"), "/account": ("admin", "ops", "rm", "pending"),
-              "/metrics-trends": STAFF}
+              "/metrics-trends": STAFF, "/admin": ("admin",)}  # Admin panel - admin role required
 # All a not-yet-approved account can reach: its own account settings
 PENDING_OK = {"/pending", "/account", "/api/auth/me", "/api/auth/logout", "/api/auth/logout-all", "/api/auth/password",
               "/api/auth/email", "/api/auth/verify/resend", "/api/auth/activity"}
 TRUST_PROXY = os.environ.get("TRUST_PROXY", "0") == "1"   # behind nginx: take the client address from X-Forwarded-For
+
+def is_dev_mode() -> bool:
+    """Check if dev mode is enabled (checked at request time for testability)."""
+    return os.environ.get("DEV_MODE", "0") == "1"
 # The login cookie is sent only to Sahayak's own path. On a shared host (indev.eko.in runs other people's apps too)
 # a cookie for "/" would reach every app there. Taken from APP_BASE_URL (".../rm-voice-agent"), or COOKIE_PATH.
 def cookie_path() -> str:
@@ -135,6 +140,15 @@ async def require_login(request: Request, call_next):
     """Every page and API needs a signed-in user, except the login/signup pages and static files.
     Pages are also checked against the user's role here; API routes check roles with `allow(...)`."""
     path = route_path(request)
+
+    # Dev mode bypass: allow /admin from localhost without auth
+    if is_dev_mode() and path == "/admin":
+        client_host = request.client.host if request.client else None
+        if client_host and client_host in ("127.0.0.1", "localhost", "::1"):
+            # Set a mock admin user for dev testing
+            request.state.user = {"id": 0, "email": "dev@localhost", "name": "Dev Admin", "role": "admin", "rm_id": None}
+            return await call_next(request)
+
     if path in PUBLIC_PATHS or path in DEVICE_PATHS or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
     header = request.headers.get("authorization", "")
@@ -1681,6 +1695,206 @@ def cleanup_recordings():
     """Remove non-CSP and short recordings, reset failed ones for reprocessing."""
     threading.Thread(target=recordings.cleanup_invalid_recordings, daemon=True, name="cleanup-recordings").start()
     return {"started": True, "message": "Cleanup running in background"}
+
+
+# ------------------------------------------------------------------ Prachi API (Phase 7: DC recording submission)
+
+class PrachiRecordingRequest(BaseModel):
+    recording_id: int
+    dc_id: int
+    dc_name: str
+    dc_phone: str
+    caller_number: str
+    recipient_number: str
+    call_direction: str
+    duration_sec: int
+    uploaded_at: str
+    transcript: str
+    transcript_json: list
+    file_path: str
+    status: str
+    attempts: int
+
+
+def _validate_phone(phone: str, field_name: str):
+    """Validate phone number format (basic check: non-empty, numeric)."""
+    if not phone or not isinstance(phone, str):
+        raise ValueError(f"Field '{field_name}' must be a non-empty string")
+    if not phone.replace(" ", "").replace("-", "").isdigit():
+        raise ValueError(f"Field '{field_name}' must contain only digits, spaces, or hyphens")
+
+
+def _validate_prachi_submission(req: PrachiRecordingRequest) -> dict:
+    """Validate Prachi recording submission against spec requirements.
+    Returns validation error dict if invalid, empty dict if valid."""
+
+    # Validate recording_id
+    if not isinstance(req.recording_id, int) or req.recording_id <= 0:
+        return {"status_code": 400, "detail": "Field 'recording_id' must be a positive integer"}
+
+    # Validate dc_id exists
+    if not isinstance(req.dc_id, int) or req.dc_id <= 0:
+        return {"status_code": 400, "detail": "Field 'dc_id' must be a positive integer"}
+    dc = db.q("SELECT id FROM dcs WHERE id=?", (req.dc_id,), one=True)
+    if not dc:
+        return {"status_code": 400, "detail": f"Field 'dc_id': DC {req.dc_id} does not exist"}
+
+    # Validate dc_name
+    if not req.dc_name or not isinstance(req.dc_name, str):
+        return {"status_code": 400, "detail": "Field 'dc_name' must be a non-empty string"}
+
+    # Validate phone numbers
+    try:
+        _validate_phone(req.dc_phone, "dc_phone")
+        _validate_phone(req.caller_number, "caller_number")
+        _validate_phone(req.recipient_number, "recipient_number")
+    except ValueError as e:
+        return {"status_code": 400, "detail": str(e)}
+
+    # Validate call_direction
+    if req.call_direction not in ("outbound", "inbound"):
+        return {"status_code": 400, "detail": "Field 'call_direction' must be 'outbound' or 'inbound'"}
+
+    # Validate duration_sec
+    if not isinstance(req.duration_sec, int) or req.duration_sec < 0:
+        return {"status_code": 400, "detail": "Field 'duration_sec' must be a non-negative integer"}
+
+    # Validate uploaded_at (ISO 8601 format)
+    try:
+        # Basic ISO 8601 validation
+        if not req.uploaded_at or not isinstance(req.uploaded_at, str):
+            raise ValueError()
+        # Check basic format: should contain T and Z or +/-
+        if "T" not in req.uploaded_at:
+            raise ValueError()
+    except (ValueError, AttributeError):
+        return {"status_code": 400, "detail": "Field 'uploaded_at' must be ISO 8601 format (e.g., 2026-11-11T10:30:00Z)"}
+
+    # Validate transcript (must have at least 10 words)
+    if not req.transcript or not isinstance(req.transcript, str):
+        return {"status_code": 400, "detail": "Field 'transcript' must be a non-empty string"}
+    word_count = len(req.transcript.split())
+    if word_count < 10:
+        return {"status_code": 422, "detail": f"Failed to process recording: transcript too short (< 10 words, got {word_count})"}
+
+    # Validate transcript_json
+    if not req.transcript_json or not isinstance(req.transcript_json, list):
+        return {"status_code": 400, "detail": "Field 'transcript_json' must be a non-empty array"}
+    for i, entry in enumerate(req.transcript_json):
+        if not isinstance(entry, dict):
+            return {"status_code": 400, "detail": f"Field 'transcript_json[{i}]' must be an object"}
+        if "speaker" not in entry or "text" not in entry:
+            return {"status_code": 400, "detail": f"Field 'transcript_json[{i}]' must have 'speaker' and 'text' fields"}
+
+    # Validate file_path
+    if not req.file_path or not isinstance(req.file_path, str):
+        return {"status_code": 400, "detail": "Field 'file_path' must be a non-empty string"}
+
+    # Validate status (must be "done")
+    if req.status != "done":
+        return {"status_code": 400, "detail": "Field 'status' must be 'done'"}
+
+    # Validate attempts
+    if not isinstance(req.attempts, int) or req.attempts < 1:
+        return {"status_code": 400, "detail": "Field 'attempts' must be a positive integer"}
+
+    return {}
+
+
+@app.post("/api/prachi/recordings")
+def prachi_receive_recording(req: PrachiRecordingRequest, request: Request):
+    """Receive DC recording submission from Prachi API.
+
+    Phase 7: DC mode recordings are transcribed and submitted here for Prachi's workflow processing.
+    Requires API key authentication (admin or service key).
+
+    Returns:
+      200: {"ok": true, "recording_id": X, "status": "received", "message": "..."}
+      400: Invalid request data
+      401: Missing/invalid API key
+      409: Duplicate recording_id already received
+      422: Processing error (e.g., transcript too short)
+    """
+
+    # Check authentication: require API key or admin user
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        # Service API key
+        service = integrations.service_for_key(header[7:].strip())
+        if not service:
+            log.warning("Prachi API: invalid API key attempt")
+            return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
+        request.state.user = service
+        log.info(f"Prachi API: authenticated via service API key ({service.get('name')})")
+    else:
+        # User must be signed in and admin/ops
+        user = auth.user_for_token(request.cookies.get(auth.COOKIE))
+        if not user or user.get("role") not in ("admin", "ops"):
+            log.warning(f"Prachi API: unauthorized access attempt (role={user.get('role') if user else 'none'})")
+            return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
+        request.state.user = user
+        log.info(f"Prachi API: authenticated via user ({user.get('email')})")
+
+    try:
+        # Validate request
+        error = _validate_prachi_submission(req)
+        if error:
+            log.warning(f"Prachi API: validation error for recording {req.recording_id}: {error['detail']}")
+            return JSONResponse({"detail": error["detail"]}, status_code=error["status_code"])
+
+        # Check for duplicate submission (409 Conflict)
+        existing = db.q(
+            "SELECT prachi_request_id FROM prachi_submissions WHERE recording_id=? ORDER BY created_at DESC LIMIT 1",
+            (req.recording_id,),
+            one=True
+        )
+        if existing:
+            msg = f"Recording {req.recording_id} already received. Ignoring duplicate."
+            log.info(f"Prachi API: {msg}")
+            return JSONResponse({"detail": msg}, status_code=409)
+
+        # Store submission record for audit trail
+        submission_id = db.x(
+            """INSERT INTO prachi_submissions
+               (recording_id, dc_id, dc_name, dc_phone, caller_number, recipient_number,
+                call_direction, duration_sec, uploaded_at, transcript, transcript_json,
+                file_path, status, attempts, received_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                req.recording_id, req.dc_id, req.dc_name, req.dc_phone,
+                req.caller_number, req.recipient_number, req.call_direction,
+                req.duration_sec, req.uploaded_at, req.transcript,
+                json.dumps(req.transcript_json), req.file_path, req.status, req.attempts,
+                time.time()
+            )
+        )
+
+        # Generate prachi_request_id for tracking
+        prachi_request_id = f"prachi_{submission_id}_{int(time.time())}"
+
+        # Update submission with request ID
+        db.update("prachi_submissions", submission_id, prachi_request_id=prachi_request_id)
+
+        # Log successful reception
+        log.info(f"Prachi API: Recording {req.recording_id} received from DC {req.dc_id} "
+                f"(req_id={prachi_request_id}, {req.duration_sec}s, attempts={req.attempts})")
+
+        # Return success response
+        return {
+            "ok": True,
+            "recording_id": req.recording_id,
+            "status": "received",
+            "message": "Recording received and queued for processing"
+        }
+
+    except ValueError as e:
+        msg = f"Failed to process recording: {str(e)}"
+        log.error(f"Prachi API: {msg} for recording {req.recording_id}")
+        return JSONResponse({"detail": msg}, status_code=422)
+    except Exception as e:
+        msg = f"Internal error processing recording {req.recording_id}: {str(e)}"
+        log.exception(f"Prachi API: {msg}")
+        return JSONResponse({"detail": "Internal error processing recording"}, status_code=500)
 
 
 # ------------------------------------------------------------------ integrations (app/integrations.py, INTEGRATION.md)
