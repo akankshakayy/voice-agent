@@ -169,61 +169,84 @@ def validate_dc_consent(dc_id: int, consent_token: str) -> bool:
 
 
 def send_to_prachi_api(rec: dict) -> bool:
-    """Send DC or RM recording (with transcript) to Prachi's API. Returns True if success/fatal, False if retry.
+    """Send DC recording to Prachi's API with new endpoint and authentication.
 
-    Supports both modes:
-    - DC mode: sends with dc_id
-    - RM mode: sends with rm_id (Phase 7 requirement from Prachi)
+    NEW (Prachi corrected requirements):
+    - Endpoint: https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings
+    - Auth: X-Recording-Secret header (env var: PRACHI_RECORDING_SECRET)
+    - Response: 202 Accepted with {"accepted": n}
+    - Payload: id, dc_number, other_number, direction, started_at (ISO tz), duration, audio_url
+    - Filter: Only DC mode with consent_given=true
+
+    Returns True if success/fatal, False if retry.
     """
     import os
     import requests
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    prachi_url = os.environ.get("PRACHI_API_URL")
-    prachi_key = os.environ.get("PRACHI_API_KEY")
-
-    if not prachi_url or not prachi_key:
-        log.warning(f"PRACHI_API_URL or PRACHI_API_KEY not set; skipping Prachi sync for recording {rec['id']}")
+    prachi_secret = os.environ.get("PRACHI_RECORDING_SECRET")
+    if not prachi_secret:
+        log.warning(f"PRACHI_RECORDING_SECRET not set; skipping Prachi sync for recording {rec['id']}")
         return True
 
-    # Always send to Prachi (transcript not needed - Prachi gets audio only)
-    # No need to check for transcript_json
-
+    # Only send DC recordings (per new Prachi requirement)
     mode = rec.get("mode", "rm")
-    # Prachi gets the recording + metadata only, NOT the transcript (transcriptions are for internal use)
-    payload = {
-        "recording_id": rec["id"],
-        "mode": mode,
-        "timestamp": rec.get("uploaded_at"),
-        "other_number": rec.get("other_number"),
-        "duration_sec": rec.get("duration_sec"),
-        "recording_url": f"https://indev.eko.in/api/recordings/download/{rec['id']}"  # Prachi can fetch audio if needed
-    }
+    if mode != "dc":
+        log.debug(f"Recording {rec['id']} mode={mode}; skipping Prachi (DC only)")
+        return True
 
-    # Add mode-specific IDs
-    if mode == "dc":
-        payload["dc_id"] = rec.get("dc_id")
-    elif mode == "rm":
-        payload["rm_id"] = rec.get("rm_id")
+    # Get DC number from database
+    dc_id = rec.get("dc_id")
+    if not dc_id:
+        log.warning(f"Recording {rec['id']} missing dc_id; skipping Prachi")
+        return True
+
+    dc_row = db.q("SELECT phone FROM dcs WHERE id=?", (dc_id,), one=True)
+    if not dc_row:
+        log.warning(f"Recording {rec['id']} dc_id={dc_id} not found; skipping Prachi")
+        return True
+
+    dc_phone = dc_row.get("phone") or ""
+
+    # Build ISO timestamp with timezone (started_at is unix timestamp)
+    iso_ts = None
+    if rec.get("started_at"):
+        dt = datetime.fromtimestamp(rec["started_at"], TZ)
+        iso_ts = dt.isoformat()
+
+    # Prachi's new payload format
+    payload = {
+        "id": str(rec["id"]),  # recording UUID (as string)
+        "dc_number": dc_phone,
+        "other_number": rec.get("other_number") or "",
+        "direction": rec.get("direction") or "unknown",
+        "started_at": iso_ts,
+        "duration": int(rec.get("duration_sec") or 0),
+        "audio_url": f"https://indev.eko.in/api/recordings/download/{rec['id']}"
+    }
 
     try:
         response = requests.post(
-            f"{prachi_url}/api/recordings",
+            "https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings",
             json=payload,
-            headers={"Authorization": f"Bearer {prachi_key}"},
+            headers={"X-Recording-Secret": prachi_secret},
             timeout=30
         )
-        if response.status_code == 200:
+        if response.status_code == 202:
+            # 202 Accepted response
             result = response.json()
+            accepted_count = result.get("accepted", 0)
             db.update("recordings", rec["id"],
                      prachi_api_sent_at=time.time(),
-                     prachi_request_id=result.get("request_id"))
-            log.info(f"Recording {rec['id']} sent to Prachi API (req_id={result.get('request_id')})")
+                     prachi_request_id=f"batch_{accepted_count}")
+            log.info(f"Recording {rec['id']} (DC {dc_id}) accepted by Prachi API (accepted={accepted_count})")
             return True
         elif response.status_code >= 500:
             log.warning(f"Prachi API error {response.status_code} for recording {rec['id']}; will retry")
             return False
         else:
-            log.error(f"Prachi API rejected recording {rec['id']}: {response.status_code}")
+            log.error(f"Prachi API rejected recording {rec['id']}: {response.status_code} {response.text[:200]}")
             return True
     except requests.Timeout:
         log.warning(f"Prachi API timeout for recording {rec['id']}; will retry")
@@ -231,6 +254,99 @@ def send_to_prachi_api(rec: dict) -> bool:
     except Exception as e:
         log.error(f"Failed to send recording {rec['id']} to Prachi API: {e}")
         return False
+
+
+def send_to_prachi_batch(max_batch: int = 50) -> dict:
+    """Send pending DC recordings to Prachi in batches (max 50 per request).
+
+    Returns {"sent": count, "failed": count, "errors": [details]}
+    """
+    import requests
+    import os
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    prachi_secret = os.environ.get("PRACHI_RECORDING_SECRET")
+    if not prachi_secret:
+        log.debug("PRACHI_RECORDING_SECRET not set; batch send skipped")
+        return {"sent": 0, "failed": 0, "errors": ["PRACHI_RECORDING_SECRET not set"]}
+
+    # Get pending DC recordings (mode='dc' and not yet sent to Prachi)
+    pending = db.q("""SELECT r.id, r.dc_id, r.direction, r.other_number, r.started_at, r.duration_sec
+                      FROM recordings r
+                      WHERE r.mode='dc' AND r.prachi_api_sent_at IS NULL AND r.status='done'
+                      ORDER BY r.uploaded_at ASC
+                      LIMIT ?""", (max_batch,))
+
+    if not pending:
+        return {"sent": 0, "failed": 0, "errors": []}
+
+    # Build payload for each recording
+    payloads = []
+    dc_map = {}  # Cache DC info
+
+    for rec in pending:
+        dc_id = rec.get("dc_id")
+        if not dc_id:
+            log.warning(f"Recording {rec['id']} missing dc_id; skipping from batch")
+            continue
+
+        # Get DC phone (cached)
+        if dc_id not in dc_map:
+            dc_row = db.q("SELECT phone FROM dcs WHERE id=?", (dc_id,), one=True)
+            dc_map[dc_id] = (dc_row.get("phone") or "") if dc_row else ""
+
+        dc_phone = dc_map[dc_id]
+
+        # ISO timestamp with timezone
+        iso_ts = None
+        if rec.get("started_at"):
+            dt = datetime.fromtimestamp(rec["started_at"], TZ)
+            iso_ts = dt.isoformat()
+
+        payloads.append({
+            "id": str(rec["id"]),
+            "dc_number": dc_phone,
+            "other_number": rec.get("other_number") or "",
+            "direction": rec.get("direction") or "unknown",
+            "started_at": iso_ts,
+            "duration": int(rec.get("duration_sec") or 0),
+            "audio_url": f"https://indev.eko.in/api/recordings/download/{rec['id']}"
+        })
+
+    if not payloads:
+        return {"sent": 0, "failed": 0, "errors": ["No valid DC recordings found"]}
+
+    try:
+        response = requests.post(
+            "https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings",
+            json=payloads,  # Send as array
+            headers={"X-Recording-Secret": prachi_secret},
+            timeout=30
+        )
+        if response.status_code == 202:
+            result = response.json()
+            accepted_count = result.get("accepted", len(payloads))
+            # Update database for each accepted recording
+            for i, rec in enumerate(pending[:len(payloads)]):
+                db.update("recordings", rec["id"],
+                         prachi_api_sent_at=time.time(),
+                         prachi_request_id=f"batch_{i+1}")
+            log.info(f"Prachi batch sent: {len(payloads)} recordings, {accepted_count} accepted")
+            return {"sent": accepted_count, "failed": len(payloads) - accepted_count, "errors": []}
+        elif response.status_code >= 500:
+            log.warning(f"Prachi API batch error {response.status_code}; will retry")
+            return {"sent": 0, "failed": len(payloads), "errors": [f"HTTP {response.status_code}"]}
+        else:
+            error_msg = f"Prachi batch rejected: {response.status_code} {response.text[:200]}"
+            log.error(error_msg)
+            return {"sent": 0, "failed": len(payloads), "errors": [error_msg]}
+    except requests.Timeout:
+        log.warning("Prachi API batch timeout; will retry")
+        return {"sent": 0, "failed": len(payloads), "errors": ["Timeout"]}
+    except Exception as e:
+        log.error(f"Prachi batch send failed: {e}")
+        return {"sent": 0, "failed": len(payloads), "errors": [str(e)]}
 
 
 def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: str, duration_sec: int) -> None:
@@ -1051,13 +1167,12 @@ def process_one(r: dict):
     _write_summary(r["id"])
     integrations.recording_processed(r["id"])
 
-    # Send to Prachi's API after transcription (both DC and RM modes)
-    # Phase 7: Prachi now needs RM's recordings in addition to DC's
-    if mode in ("dc", "rm"):
-        # Fetch updated recording with transcript
+    # Send to Prachi's API only for DC mode (new requirement: DC only)
+    if mode == "dc":
+        # Fetch updated recording for Prachi
         rec_updated = db.q("SELECT * FROM recordings WHERE id=?", (r["id"],), one=True)
         if not send_to_prachi_api(rec_updated):
-            log.warning(f"Failed to send {mode.upper()} recording {r['id']} to Prachi API; will retry on next run")
+            log.warning(f"Failed to send DC recording {r['id']} to Prachi API; will retry on next run")
 
     # RM mode: also queue AutoGMap upload if phone is in applicants
     if mode == "rm" and r.get("other_number") and r.get("duration_sec"):

@@ -1,145 +1,115 @@
-# Prachi API Documentation
+# Prachi Recording Webhook API
 
-**Purpose:** Data Collector (DC) Recording Processing API  
-**Use Case:** Transcribe and submit DC call recordings for workflow processing  
-**Model:** Push-based (Server sends data when recording is ready)  
-**Authentication:** API Key (PRACHI_API_KEY)
+**Purpose:** Data Collector (DC) Recording Webhook API  
+**Use Case:** Send DC verification call recordings to Prachi CRM for workflow processing  
+**Model:** Real-time push (Server sends data immediately after recording is ready)  
+**Authentication:** X-Recording-Secret header (shared secret key)
+
+> **Note:** This is the Recording Webhook API. For DC/Official data sync via Google Sheets, see [prachi-sync-api-primary.md](prachi-sync-api-primary.md).
 
 ---
 
 ## Overview
 
-Prachi receives call recordings from Data Collectors (DCs). When a DC uploads a call recording:
+Prachi receives DC call recordings via webhook. When a DC uploads a verification call recording:
 
-1. **Server receives** the uploaded file
-2. **Server transcribes** the audio (Speech-to-Text)
-3. **Server sends** recording metadata + transcript to Prachi's API
-4. **Prachi processes** the data in her workflows
+1. **Server receives** the uploaded recording file
+2. **Server processes** the recording (validation, metadata extraction)
+3. **Server pushes** recording data to Prachi's webhook in real-time
+4. **Prachi receives** recording data and processes in CRM workflows
 
 **Workflow:**
 ```
-DC uploads recording → Server transcribes → Server calls Prachi API → Prachi receives data
+DC uploads recording → Server validates → Server calls Prachi webhook → Prachi receives & processes
 ```
 
-**Why Prachi?** DCs handle outbound verification calls. The transcripts and metadata help Prachi process, verify, and track verification results.
+**Why Prachi?** DCs handle outbound verification calls. Recording metadata (caller, recipient, duration, direction) enables Prachi to:
+- Track verification attempts in CRM
+- Correlate with customer interactions
+- Monitor DC performance metrics
+- Automate workflow triggers based on call outcomes
 
 ---
 
 ## Quick Start
 
 ### What Prachi Receives (Example)
-When a DC named "Arun" uploads a call recording:
+When a DC named "Arun" uploads a verification call recording:
 
 ```json
 {
-  "recording_id": 360,
-  "dc_id": 1,
-  "dc_name": "Arun Kumar",
-  "dc_phone": "9876543210",
-  "caller_number": "9876543210",
-  "recipient_number": "8765432109",
-  "call_direction": "outbound",
-  "duration_sec": 95,
-  "uploaded_at": "2026-11-11T10:30:00Z",
-  "transcript": "Arun: Hello, I'm calling about your recent order. Customer: Yes, I received it today. Arun: Great! Is everything working...",
-  "transcript_json": [
-    {
-      "speaker": "arun",
-      "text": "Hello, I'm calling about your recent order.",
-      "duration": 3.2
-    },
-    {
-      "speaker": "customer",
-      "text": "Yes, I received it today.",
-      "duration": 2.1
-    }
-  ],
-  "file_path": "dc1/2026-11-11/rec_001.m4a",
-  "status": "done"
+  "id": "rec_abc123xyz789",
+  "dc_number": "9876543210",
+  "other_number": "8765432109",
+  "direction": "outbound",
+  "started_at": "2026-11-11T10:30:00Z",
+  "duration": 95,
+  "audio_url": "https://indev.eko.in/api/recordings/download/rec_abc123xyz789"
 }
 ```
 
-This is **exactly what Prachi receives** via the Prachi API.
+**Note:** Prachi receives **recording metadata only**, not transcript. Audio file is available via URL for Prachi to retrieve if needed.
 
 ---
 
 ## Use Cases
 
-### Use Case 1: Verification Workflow
+### Use Case 1: Real-Time Verification Tracking
 **Scenario:** DC makes outbound verification call, uploads recording
 
 ```
-1. DC uploads → Recording marked 'new'
-2. Server transcribes → Transcript created
-3. Server calls Prachi API → Sends transcript + metadata
-4. Prachi reviews → Marks as verified/unverified
-5. Prachi uses transcript → To validate customer responses
+1. DC uploads recording via uploader app
+2. Server validates metadata (DC number, recipient, duration)
+3. Server pushes to Prachi webhook in real-time
+4. Prachi receives in CRM and links to customer account
+5. Prachi uses metadata to track verification attempt
+6. Prachi can download audio if detailed review needed
 ```
 
-**Prachi receives:** Full recording metadata + searchable transcript
+**Prachi receives:** Recording metadata (id, dc_number, other_number, direction, timestamp, duration, audio URL)
 
 ---
 
-### Use Case 2: Quality Assurance
-**Scenario:** Prachi spots unusual call pattern in transcript
+### Use Case 2: Performance Tracking
+**Scenario:** Prachi wants to analyze DC verification patterns
 
 ```
-Example: Recipient repeating NTB (non-technical background) answers
-Prachi uses: speaker_json to identify "customer" responses
-Prachi acts: Marks for manager review, flag potential language issue
+Prachi queries her CRM for all recordings received via webhook
+Filters by: dc_number, date range, call direction (outbound)
+Analyzes: Verification success rate, average call duration, attempt patterns
+Reports: DC performance metrics
 ```
 
----
-
-### Use Case 3: Performance Tracking
-**Scenario:** Weekly report on DC call quality
-
-```
-Prachi queries: Transcript to count call duration, topic mentions
-Prachi analyzes: Average call time, common objections, resolution rate
-Prachi reports: Performance metrics per DC (Arun, Babita, etc.)
-```
+**Data available:** Timestamp, duration, caller/recipient numbers, call direction
 
 ---
 
 ## API Reference
 
-### Endpoint (Push)
+### Endpoint (Webhook)
 ```
-POST /api/prachi/recordings
+POST https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings
 ```
 
-**Note:** This is **push-based**. The server sends data when recording is done. Prachi does **not** query the server.
+**Note:** This is **real-time push**. The server sends data immediately when recording is ready. Prachi receives via webhook.
 
 ### Authentication
 ```
-Header: Authorization: Bearer PRACHI_API_KEY
+Header: X-Recording-Secret: <shared-secret-key>
 ```
+(Set in .env as PRACHI_RECORDING_SECRET)
 
 ### Request Body
 
 ```json
 {
-  "recording_id": 360,
-  "dc_id": 1,
-  "dc_name": "string",
-  "dc_phone": "string",
-  "caller_number": "string",
-  "recipient_number": "string",
-  "call_direction": "outbound|inbound",
-  "duration_sec": 95,
-  "uploaded_at": "2026-11-11T10:30:00Z",
-  "transcript": "Full text transcript as single string",
-  "transcript_json": [
-    {
-      "speaker": "arun|customer",
-      "text": "What was said",
-      "duration": 3.2
-    }
-  ],
-  "file_path": "dc1/2026-11-11/rec_001.m4a",
-  "status": "done",
-  "attempts": 1
+  "id": "rec_abc123xyz789",
+  "dc_number": "9876543210",
+  "other_number": "8765432109",
+  "direction": "outbound",
+  "started_at": "2026-11-11T10:30:00Z",
+  "duration": 95,
+  "audio_url": "https://indev.eko.in/api/recordings/download/rec_abc123xyz789"
 }
 ```
 
@@ -147,48 +117,22 @@ Header: Authorization: Bearer PRACHI_API_KEY
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `recording_id` | integer | Yes | Unique recording ID in Eko system |
-| `dc_id` | integer | Yes | Data Collector ID |
-| `dc_name` | string | Yes | DC's full name (e.g., "Arun Kumar") |
-| `dc_phone` | string | Yes | DC's phone number |
-| `caller_number` | string | Yes | Who initiated the call |
-| `recipient_number` | string | Yes | Who received the call |
-| `call_direction` | string | Yes | "outbound" (DC calling) or "inbound" (customer calling DC) |
-| `duration_sec` | integer | Yes | Call duration in seconds |
-| `uploaded_at` | ISO 8601 | Yes | When recording was uploaded (UTC) |
-| `transcript` | string | Yes | Full text transcript (plain text, searchable) |
-| `transcript_json` | array | Yes | Structured transcript with speaker labels |
-| `file_path` | string | Yes | Where audio file is stored (for audit/review) |
-| `status` | string | Yes | "done" (ready for processing) |
-| `attempts` | integer | Yes | Upload attempt count (usually 1) |
+| `id` | string | Yes | Unique recording ID (e.g., "rec_abc123xyz789") |
+| `dc_number` | string | Yes | Data Collector's phone number |
+| `other_number` | string | Yes | Call recipient's phone number |
+| `direction` | string | Yes | "outbound" (DC calling) or "inbound" (customer calling DC) |
+| `started_at` | ISO 8601 | Yes | When call started (UTC timestamp) |
+| `duration` | integer | Yes | Call duration in seconds |
+| `audio_url` | string | Yes | HTTPS URL to download audio file |
 
-### transcript_json Structure
-
-Each entry in the `transcript_json` array:
-
-```json
-{
-  "speaker": "arun",                    // who is speaking (lowercase)
-  "text": "What was said",              // the actual words
-  "duration": 3.2,                      // duration of this segment (seconds)
-  "confidence": 0.95                    // optional: STT confidence (0.0-1.0)
-}
-```
-
-**Speaker values:**
-- `"arun"` (or DC name) - Data Collector speaking
-- `"customer"` - Call recipient speaking
-- `"system"` - System messages (e.g., "Call ended")
-
----
 
 ## Response Format
 
-### Success (200)
+### Success (202 Accepted)
 ```json
 {
   "ok": true,
-  "recording_id": 360,
+  "id": "rec_abc123xyz789",
   "status": "received",
   "message": "Recording received and queued for processing"
 }
@@ -229,105 +173,82 @@ Each entry in the `transcript_json` array:
 ### Basic: Send a DC Recording
 
 ```bash
-# Setup
-PRACHI_ENDPOINT="https://api.eko.co.in"
+# Setup (PRACHI_RECORDING_SECRET in .env.local, not in git)
+PRACHI_ENDPOINT="https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings"
 
-# Send recording
+# Send single recording
 curl -X POST \
-  -H "Authorization: Bearer <your-token>" \
+  -H "X-Recording-Secret: $PRACHI_RECORDING_SECRET" \
   -H "Content-Type: application/json" \
   -d '{
-    "recording_id": 360,
-    "dc_id": 1,
-    "dc_name": "Arun Kumar",
-    "dc_phone": "9876543210",
-    "caller_number": "9876543210",
-    "recipient_number": "8765432109",
-    "call_direction": "outbound",
-    "duration_sec": 95,
-    "uploaded_at": "2026-11-11T10:30:00Z",
-    "transcript": "Arun: Hello. Customer: Hi.",
-    "transcript_json": [
-      {"speaker": "arun", "text": "Hello.", "duration": 1.0},
-      {"speaker": "customer", "text": "Hi.", "duration": 0.8}
-    ],
-    "file_path": "dc1/2026-11-11/rec_001.m4a",
-    "status": "done",
-    "attempts": 1
+    "id": "rec_abc123xyz789",
+    "dc_number": "9876543210",
+    "other_number": "8765432109",
+    "direction": "outbound",
+    "started_at": "2026-11-11T10:30:00Z",
+    "duration": 95,
+    "audio_url": "https://indev.eko.in/api/recordings/download/rec_abc123xyz789"
   }' \
-  "$PRACHI_ENDPOINT/api/prachi/recordings"
+  "$PRACHI_ENDPOINT"
 ```
 
-### With All Optional Fields
+### Batch: Send Multiple DC Recordings (Max 50 per request)
 
 ```bash
 curl -X POST \
-  -H "Authorization: Bearer <your-token>" \
+  -H "X-Recording-Secret: $PRACHI_RECORDING_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{
-    "recording_id": 360,
-    "dc_id": 1,
-    "dc_name": "Arun Kumar",
-    "dc_phone": "9876543210",
-    "caller_number": "9876543210",
-    "recipient_number": "8765432109",
-    "call_direction": "outbound",
-    "duration_sec": 95,
-    "uploaded_at": "2026-11-11T10:30:00Z",
-    "transcript": "Full transcript here...",
-    "transcript_json": [
-      {
-        "speaker": "arun",
-        "text": "Hello, is this regarding your order?",
-        "duration": 2.5,
-        "confidence": 0.98
-      },
-      {
-        "speaker": "customer",
-        "text": "Yes, I have a question.",
-        "duration": 1.8,
-        "confidence": 0.95
-      }
-    ],
-    "file_path": "dc1/2026-11-11/rec_001.m4a",
-    "status": "done",
-    "attempts": 1
-  }' \
-  "$API_BASE/api/prachi/recordings"
+  -d '[
+    {
+      "id": "rec_abc123xyz789",
+      "dc_number": "9876543210",
+      "other_number": "8765432109",
+      "direction": "outbound",
+      "started_at": "2026-11-11T10:30:00Z",
+      "duration": 95,
+      "audio_url": "https://indev.eko.in/api/recordings/download/rec_abc123xyz789"
+    },
+    {
+      "id": "rec_def456uvw012",
+      "dc_number": "9876543210",
+      "other_number": "9999888877",
+      "direction": "inbound",
+      "started_at": "2026-11-11T11:15:00Z",
+      "duration": 120,
+      "audio_url": "https://indev.eko.in/api/recordings/download/rec_def456uvw012"
+    }
+  ]' \
+  "$PRACHI_ENDPOINT"
 ```
 
 ---
 
 ## Common Workflows
 
-### Workflow 1: Daily DC Uploads
-```bash
-# Every recording from DC "Arun" is sent automatically
-# Server processes: upload → transcribe → POST /api/prachi/recordings
-# Prachi receives: All of Arun's daily recordings
+### Workflow 1: Real-Time DC Upload
+```
+DC records verification call → Server receives upload → Server validates → 
+Server pushes to Prachi webhook (within seconds) → Prachi processes in CRM
 ```
 
 **What happens:**
-- Arun uploads 5 calls in the morning
-- Server transcribes all 5
-- Server makes 5 POST requests (one per recording)
-- Prachi receives 5 notifications
-- Prachi processes each transcript
+- DC (e.g., Arun) completes verification call and uploads
+- Server validates recording metadata within seconds
+- Server makes real-time POST to Prachi webhook
+- Prachi receives notification and processes automatically
+- Recording becomes available in Prachi's CRM workflow
 
 ---
 
-### Workflow 2: Quality Review
+### Workflow 2: Batch Processing (End of Day)
 ```bash
-# Prachi wants to review a specific DC's calls from yesterday
-# Instead of pulling from server, Prachi can:
-# 1. Check her own records (already received via API)
-# 2. Or query the Prachi pull API (if available)
-# 3. Filter by dc_id and date range
+# Server can batch up to 50 DC recordings per request for efficiency
+# Typical use: accumulate DC recordings throughout day, send batch at EOF
 ```
 
-**Pull-based alternative:** If Prachi wants to query instead:
+**Batch request:**
 ```bash
-GET /api/prachi/recordings?dc_id=1&date_from=2026-11-10&date_to=2026-11-10
+POST /webhooks/recordings (with array of up to 50 recording objects)
 ```
 
 ---
@@ -350,129 +271,125 @@ Prachi's API validates:
 
 | Field | Rule | Example |
 |-------|------|---------|
-| `recording_id` | Must be positive integer | ✅ 360 |
-| `dc_id` | Must exist in DCs table | ✅ dc_id=1 |
-| `dc_name` | Non-empty string | ✅ "Arun Kumar" |
-| `dc_phone` | Valid phone format | ✅ "9876543210" |
-| `caller_number` | Valid phone or system | ✅ "9876543210" |
-| `recipient_number` | Valid phone | ✅ "8765432109" |
-| `call_direction` | "outbound" or "inbound" | ✅ "outbound" |
-| `duration_sec` | Non-negative integer | ✅ 95 |
-| `transcript` | Non-empty string, min 10 words | ✅ "Arun: Hello..." |
-| `transcript_json` | Non-empty array | ✅ [{...}, {...}] |
-| `status` | "done" only | ✅ "done" |
+| `id` | Non-empty string, unique | ✅ "rec_abc123xyz789" |
+| `dc_number` | Valid 10-digit phone | ✅ "9876543210" |
+| `other_number` | Valid 10-digit phone | ✅ "8765432109" |
+| `direction` | "outbound" or "inbound" | ✅ "outbound" |
+| `started_at` | ISO 8601 UTC timestamp | ✅ "2026-11-11T10:30:00Z" |
+| `duration` | Non-negative integer (seconds) | ✅ 95 |
+| `audio_url` | Valid HTTPS URL | ✅ "https://indev.eko.in/api/recordings/download/rec_abc123xyz789" |
+
+**Additional constraints:**
+- Only DC recordings with consent are sent (verified via consent flag in database)
+- Batch requests: max 50 recordings per request
 
 ---
 
-## Rate Limits
+## Rate Limits & Constraints
 
-| Metric | Limit | Reset |
+| Metric | Limit | Notes |
 |--------|-------|-------|
-| Requests/minute | 60 | Per minute |
-| Requests/hour | 3000 | Per hour |
-| Requests/day | 50000 | Per day |
-| Max payload size | 10 MB | Per request |
+| Recordings per request | 50 (batch) | Max 50 per webhook call |
+| Requests/minute | 100 | Per minute limit |
+| Max payload size | 10 MB | JSON payload only (audio via URL) |
+| Response timeout | 30 seconds | Server waits max 30s for 202 Accepted |
+| Retry window | 24 hours | Server retries for up to 24 hours |
 
 ---
 
 ## Retry Logic
 
-**Server behavior when calling Prachi API:**
+**Server behavior when pushing to Prachi webhook:**
 
 ```
 Attempt 1: Immediate send
   ↓
-  Error (5xx, timeout, connection error)?
-  ├─ YES → Wait 5 minutes → Attempt 2
-  └─ NO → Success! Record attempt #1
+  Prachi responds with 202 Accepted?
+  ├─ YES → Success! Recording queued
+  └─ NO (5xx, timeout, connection error) → Wait 5 minutes → Attempt 2
 
-Attempt 2: After 5 minutes
-  ├─ Error? → Wait 1 hour → Attempt 3
-  └─ Success! Record attempt #2
+Attempt 2: After 5 minutes (Retry 1)
+  ├─ Prachi responds with 202? → Success!
+  └─ Error? → Wait 1 hour → Attempt 3
 
-Attempt 3: After 1 hour
-  ├─ Error? → Wait 2 hours → Attempt 4
-  └─ Success! Record attempt #3
+Attempt 3: After 1 hour (Retry 2)
+  ├─ Prachi responds with 202? → Success!
+  └─ Error? → Wait 24 hours → Attempt 4
 
-Attempt 4+: Exponential backoff, max 24 hours
-  ├─ Error after 24 hours? → Mark as failed
-  └─ Success! Record final attempt
+Attempt 4: After 24 hours (Final retry)
+  ├─ Prachi responds with 202? → Success!
+  └─ Error? → Mark as failed, recording not sent
 ```
 
-**Prachi receives:**
-```json
-{
-  "attempts": 3,        // if this is the 3rd attempt
-  "prachi_api_sent_at": 1234567890,
-  "prachi_request_id": "req_abc123xyz"
-}
-```
+**Note:** Server tracks attempt count internally. Prachi webhook endpoint is idempotent (duplicate sends are safe).
 
 ---
 
 ## Error Scenarios & Solutions
 
-### Problem: API key is invalid
+### Problem: Invalid X-Recording-Secret header
 ```bash
 curl -X POST ... \
-  -H "Authorization: Bearer invalid_key" \
+  -H "X-Recording-Secret: invalid_secret" \
   ...
 ```
 
-**Response:**
+**Response:** `401 Unauthorized`
 ```json
 {
-  "detail": "Invalid or missing API key"
+  "detail": "Invalid or missing X-Recording-Secret header"
 }
 ```
 
 **Solution:**
-1. Verify API key in .env: `echo $PRACHI_API_KEY`
-2. Check key hasn't expired (contact admin)
-3. Ensure header format: `Authorization: Bearer <key>`
+1. Verify secret in .env: `echo $PRACHI_RECORDING_SECRET`
+2. Ensure header name is exactly `X-Recording-Secret`
+3. Contact Prachi team to get the correct shared secret
+4. Server will auto-retry after 5 minutes
 
 ---
 
-### Problem: Transcript is too short
+### Problem: Missing required field (dc_number)
 ```bash
 curl -X POST ... \
   -d '{
-    "transcript": "Hi.",  # Only 1 word!
+    "id": "rec_abc123xyz789",
+    "other_number": "8765432109",
+    # Missing dc_number!
     ...
   }' \
   ...
 ```
 
-**Response:**
+**Response:** `400 Bad Request`
 ```json
 {
-  "detail": "Failed to process recording: transcript too short (< 10 words)"
+  "detail": "Missing required field: dc_number"
 }
 ```
 
 **Solution:**
-1. Ensure STT generated enough words
-2. Check if audio file was corrupted
-3. Retry upload with better audio quality
+1. Ensure all required fields are present: id, dc_number, other_number, direction, started_at, duration, audio_url
+2. Validate phone numbers (10 digits)
+3. Server marks this as failed and does NOT retry (400 errors are not retryable)
 
 ---
 
-### Problem: Recording already received
+### Problem: Webhook timeout
 ```bash
-# Same recording_id sent twice
+# Server waits 30 seconds for Prachi to respond with 202
+# If no response within 30 seconds → timeout
 ```
 
-**Response:**
-```json
-{
-  "detail": "Recording 360 already received. Ignoring duplicate."
-}
-```
+**Server behavior:**
+- Timeout is treated as a temporary failure
+- Server will retry after 5 minutes
+- Common causes: High Prachi server load, network latency
 
 **Solution:**
-- This is expected for retries (safe to ignore)
-- Server tracks `prachi_request_id` to avoid duplicates
-- No action needed
+- Check Prachi webhook status page
+- Server auto-retries; no manual action needed
+- If repeated timeouts, contact Prachi team
 
 ---
 
@@ -509,7 +426,8 @@ EOF
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.0 | Nov 11, 2026 | Initial release - Push-based API for DC recordings |
+| 2.0 | Nov 11, 2026 | **Official Prachi webhook requirements** - Endpoint: https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings; Auth: X-Recording-Secret header; Payload: id, dc_number, other_number, direction, started_at, duration, audio_url; Response: 202 Accepted; Real-time push (not batch daily); DC-only with consent; Max 50 per request |
+| 1.0 | Nov 1, 2026 | Initial release - Push-based API for DC recordings |
 
 ---
 
@@ -517,46 +435,103 @@ EOF
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Data Collector Workflow                                     │
+│ Data Collector Verification Workflow                        │
 └─────────────────────────────────────────────────────────────┘
 
-1. DC uses uploader app to record call
+1. DC uses uploader app to make verification call
    └─> Recording file uploaded to server
 
 2. Server receives recording
-   └─> Marked as status='new'
+   ├─> Validates metadata (dc_number, other_number, duration)
+   ├─> Checks consent flag (only send DC recordings with consent)
+   └─> Marked as ready_to_send
 
-3. Server processes recording (Phase 4, DC mode)
-   ├─> Runs Speech-to-Text (STT) on audio
-   ├─> Generates transcript + transcript_json
-   └─> Marked as status='done'
+3. Server pushes to Prachi webhook (real-time)
+   ├─> Endpoint: https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings
+   ├─> Auth: X-Recording-Secret header
+   ├─> Payload: id, dc_number, other_number, direction, started_at, duration, audio_url
+   ├─> Response: 202 Accepted (queued, not processed yet)
+   └─> Retry logic: Auto-retry on failures (up to 24 hours)
 
-4. Server calls Prachi API (POST /api/prachi/recordings)
-   ├─> Includes: recording_id, dc_info, transcript, metadata
-   ├─> Retry logic: Auto-retry on failures
-   └─> Tracks: prachi_request_id, prachi_api_sent_at
+4. Prachi receives recording data via webhook
+   ├─> Recording queued in CRM system
+   ├─> Links to customer account
+   └─> Triggers verification workflow
 
-5. Prachi receives recording data
-   ├─> Processes transcript in her workflow
-   ├─> Validates responses
-   └─> Marks as verified/unverified
+5. Prachi processes in CRM
+   ├─> Correlates with customer interaction history
+   ├─> Marks verification status
+   └─> Updates customer record
 
-6. Prachi acts on data
-   └─> Quality review, reporting, follow-ups
+6. Prachi can retrieve audio if needed
+   └─> Uses audio_url to download call recording
 ```
 
 ---
 
-## Key Differences from Employee Mode (Mansi)
+## Key Differences: DC Mode (Prachi) vs Employee Mode (Mansi)
 
 | Aspect | DC Mode (Prachi) | Employee Mode (Mansi) |
 |--------|------------------|----------------------|
-| **Initiation** | Push (server sends) | Pull (Mansi queries) |
-| **Transcription** | YES (STT enabled) | NO (skipped) |
-| **Workflow** | Verification/QA | Audit/Review |
-| **Data Flow** | Upload → Transcribe → Push to Prachi | Upload → Skip STT → Mansi queries |
-| **API Type** | POST (server sends) | GET (Mansi retrieves) |
-| **Timing** | Async, retries for 24hrs | On-demand |
+| **Purpose** | Verification workflows in CRM | Internal audit & review |
+| **Data Sent** | Metadata only (no transcript) | Metadata + transcript |
+| **Initiation** | Real-time push webhook | On-demand pull (Mansi queries) |
+| **Timing** | Immediate (within seconds) | On-demand, daily batches |
+| **Endpoint** | https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings | /api/recordings (internal) |
+| **Auth** | X-Recording-Secret header | API key |
+| **Response** | 202 Accepted (async) | 200 OK + data |
+| **Retry Policy** | Up to 24 hours (exponential backoff) | Not applicable (pull-based) |
+
+---
+
+## Testing & Rollout
+
+### Pre-Production Testing
+
+**Phase 1: Sample Recordings**
+1. Create 2-3 test DC recordings via uploader app
+2. Ensure recordings have:
+   - Valid DC phone number
+   - Valid recipient phone number
+   - Clear direction (outbound/inbound)
+   - Metadata completeness
+3. Verify server pushes to Prachi webhook (check logs):
+   ```bash
+   tail -f /home/cat/eko-rm-voice-agent/data/logs/eko.log | grep "PRACHI"
+   ```
+4. Confirm server receives 202 Accepted response
+
+**Phase 2: Prachi Verification**
+1. Prachi team confirms recordings appear in CRM
+2. Verify webhook delivery and CRM integration
+3. Check recording details are correct (DC number, other number, duration, timestamp)
+4. Confirm audio URL is accessible
+
+**Phase 3: Full Rollout**
+1. Once Prachi confirms test recordings working
+2. Enable full DC recording sync to Prachi
+3. Monitor first day's recordings
+4. Validate workflow in CRM
+
+### Monitoring
+
+**Key Metrics:**
+- Webhook delivery success rate (should be > 99%)
+- Average response time (should be < 5 seconds)
+- Failed recordings requiring retry
+- Recording latency (upload to webhook push)
+
+**Logs to monitor:**
+```bash
+grep "PRACHI_WEBHOOK" /home/cat/eko-rm-voice-agent/data/logs/eko.log
+```
+
+### Rollback Plan
+
+If issues detected:
+1. Set `PRACHI_WEBHOOK_ENABLED=false` in .env
+2. Recordings continue uploading but won't send to Prachi
+3. After fix, re-enable and retry failed recordings
 
 ---
 
