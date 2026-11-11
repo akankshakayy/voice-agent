@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import agent, auth, bootstrap, db, google_auth, integrations, mailer, metrics, misheard, recordings, report, stt, telemetry, tts  # noqa: E402
+from . import agent, auth, bootstrap, bulk_load, db, google_auth, integrations, mailer, metrics, misheard, recordings, report, stt, telemetry, tts  # noqa: E402
 from .logging_config import setup_logging  # noqa: E402
 from .seed import seed_if_demo  # noqa: E402
 from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, MAX_MISUNDERSTOOD  # noqa
@@ -524,6 +524,61 @@ def harness_page():
 def admin_page():
     """Admin panel: Manage Data Collectors, Employees, and Allowed Numbers."""
     return FileResponse(os.path.join(STATIC, "admin.html"))
+
+
+# ------------------------------------------------------------------ bulk load
+@app.post("/api/bulk-load/dcs", dependencies=[Depends(allow("admin"))])
+async def bulk_load_dcs_endpoint(file: UploadFile = File(...), actor=Depends(allow("admin"))):
+    """Bulk load Data Collectors from Excel file."""
+    try:
+        # Validate file type
+        if not file.filename.endswith(('.xlsx', '.xls')):
+            raise HTTPException(400, "File must be .xlsx or .xls")
+
+        # Read file content
+        content = await file.read()
+        if not content:
+            raise HTTPException(400, "File is empty")
+
+        if len(content) > 5 * 1024 * 1024:  # 5 MB limit
+            raise HTTPException(413, "File too large (max 5 MB)")
+
+        # Perform bulk load
+        result = bulk_load.bulk_load_dcs(content, actor.get("email", "unknown"))
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Bulk load DCs failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Bulk load failed: {str(e)}")
+
+
+@app.post("/api/bulk-load/employees", dependencies=[Depends(allow("admin"))])
+async def bulk_load_employees_endpoint(file: UploadFile = File(...), actor=Depends(allow("admin"))):
+    """Bulk load Employees from Excel file."""
+    try:
+        # Validate file type
+        if not file.filename.endswith(('.xlsx', '.xls')):
+            raise HTTPException(400, "File must be .xlsx or .xls")
+
+        # Read file content
+        content = await file.read()
+        if not content:
+            raise HTTPException(400, "File is empty")
+
+        if len(content) > 5 * 1024 * 1024:  # 5 MB limit
+            raise HTTPException(413, "File too large (max 5 MB)")
+
+        # Perform bulk load
+        result = bulk_load.bulk_load_employees(content, actor.get("email", "unknown"))
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Bulk load Employees failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Bulk load failed: {str(e)}")
 
 
 # ------------------------------------------------------------------ reference data
