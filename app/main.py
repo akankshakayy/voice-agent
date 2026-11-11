@@ -520,6 +520,12 @@ def harness_page():
     return FileResponse(os.path.join(STATIC, "harness.html"))
 
 
+@app.get("/admin", dependencies=[Depends(allow("admin"))])
+def admin_page():
+    """Admin panel: Manage Data Collectors, Employees, and Allowed Numbers."""
+    return FileResponse(os.path.join(STATIC, "admin.html"))
+
+
 # ------------------------------------------------------------------ reference data
 @app.get("/api/config", dependencies=[Depends(allow("admin", "ops", "rm"))])
 def config():

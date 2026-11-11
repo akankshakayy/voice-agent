@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eko Admin Panel - Uploader Management</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --eko-primary: #1F2937;
+            --eko-secondary: #D9861A;
+            --eko-accent: #10B981;
+            --eko-danger: #EF4444;
+            --eko-gray-50: #F9FAFB;
+            --eko-gray-100: #F3F4F6;
+            --eko-gray-200: #E5E7EB;
+            --eko-gray-300: #D1D5DB;
+            --eko-gray-400: #9CA3AF;
+            --eko-gray-600: #4B5563;
+            --eko-gray-700: #374151;
+            --eko-gray-800: #1F2937;
+            --eko-gray-900: #111827;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--eko-gray-50);
+            color: var(--eko-gray-900);
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: var(--eko-primary);
+            color: white;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .sidebar-logo {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .sidebar-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .nav-item {
+            padding: 12px 15px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .nav-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-item.active {
+            background: var(--eko-secondary);
+            color: white;
+        }
+
+        /* Main content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .header {
+            background: white;
+            padding: 20px 30px;
+            border-bottom: 1px solid var(--eko-gray-200);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .header-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--eko-gray-900);
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .btn-primary {
+            background: var(--eko-secondary);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn-primary:hover {
+            background: #C97A14;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(217, 134, 26, 0.3);
+        }
+
+        .btn-secondary {
+            background: var(--eko-gray-200);
+            color: var(--eko-gray-900);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn-secondary:hover {
+            background: var(--eko-gray-300);
+        }
+
+        .btn-danger {
+            background: var(--eko-danger);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn-danger:hover {
+            background: #DC2626;
+        }
+
+        /* Content area */
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 30px;
+        }
+
+        /* Page sections */
+        .page {
+            display: none;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        /* Search and filters */
+        .search-bar {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+
+        .search-input {
+            flex: 1;
+            min-width: 250px;
+            padding: 10px 15px;
+            border: 1px solid var(--eko-gray-300);
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--eko-secondary);
+            box-shadow: 0 0 0 3px rgba(217, 134, 26, 0.1);
+        }
+
+        /* Table */
+        .table-container {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        thead {
+            background: var(--eko-gray-100);
+            border-bottom: 2px solid var(--eko-gray-200);
+        }
+
+        th {
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--eko-gray-700);
+        }
+
+        td {
+            padding: 15px;
+            border-bottom: 1px solid var(--eko-gray-200);
+        }
+
+        tbody tr:hover {
+            background: var(--eko-gray-50);
+        }
+
+        /* Status badge */
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-active {
+            background: #D1FAE5;
+            color: #065F46;
+        }
+
+        .status-inactive {
+            background: #FEE2E2;
+            color: #991B1B;
+        }
+
+        /* Actions */
+        .actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn-edit {
+            background: #DBEAFE;
+            color: #1E40AF;
+        }
+
+        .btn-edit:hover {
+            background: #BFDBFE;
+        }
+
+        .btn-delete {
+            background: #FEE2E2;
+            color: #991B1B;
+        }
+
+        .btn-delete:hover {
+            background: #FECACA;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            align-items: center;
+            margin-top: 20px;
+        }
+
+        .pagination button {
+            padding: 8px 12px;
+            border: 1px solid var(--eko-gray-300);
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .pagination button:hover {
+            background: var(--eko-gray-100);
+        }
+
+        .pagination button.active {
+            background: var(--eko-secondary);
+            color: white;
+            border-color: var(--eko-secondary);
+        }
+
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 25px rgba(0, 0, 0, 0.15);
+        }
+
+        .modal-header {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: var(--eko-gray-900);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--eko-gray-700);
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        input[type="email"],
+        input[type="tel"],
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--eko-gray-300);
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--eko-secondary);
+            box-shadow: 0 0 0 3px rgba(217, 134, 26, 0.1);
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 30px;
+        }
+
+        /* Loading state */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--eko-gray-500);
+        }
+
+        .spinner {
+            border: 3px solid var(--eko-gray-200);
+            border-top: 3px solid var(--eko-secondary);
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--eko-gray-500);
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+
+        /* Alert */
+        .alert {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .alert-success {
+            background: #D1FAE5;
+            color: #065F46;
+            border: 1px solid #6EE7B7;
+        }
+
+        .alert-error {
+            background: #FEE2E2;
+            color: #991B1B;
+            border: 1px solid #FECACA;
+        }
+
+        .alert-info {
+            background: #DBEAFE;
+            color: #1E40AF;
+            border: 1px solid #93C5FD;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                height: auto;
+                padding: 15px;
+                display: flex;
+                gap: 20px;
+                overflow-x: auto;
+            }
+
+            .sidebar-nav {
+                flex-direction: row;
+                flex: 1;
+            }
+
+            .search-bar {
+                flex-direction: column;
+            }
+
+            .search-input {
+                min-width: unset;
+            }
+
+            table {
+                font-size: 12px;
+            }
+
+            th, td {
+                padding: 10px;
+            }
+
+            .header {
+                flex-direction: column;
+                gap: 15px;
+                align-items: flex-start;
+            }
+
+            .header-actions {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-logo">🔧 Eko Admin</div>
+            <div class="sidebar-nav">
+                <div class="nav-item active" data-page="dcs">📍 Data Collectors</div>
+                <div class="nav-item" data-page="employees">👥 Employees</div>
+                <div class="nav-item" data-page="allowed-numbers">📞 Allowed Numbers</div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Header -->
+            <div class="header">
+                <div class="header-title" id="pageTitle">Data Collectors</div>
+                <div class="header-actions">
+                    <button class="btn-primary" id="addBtn" onclick="openModal()">+ Add New</button>
+                </div>
+            </div>
+
+            <!-- Content -->
+            <div class="content">
+                <!-- Alerts -->
+                <div id="alertContainer"></div>
+
+                <!-- DCs Page -->
+                <div class="page active" id="dcs-page">
+                    <div class="search-bar">
+                        <input type="text" class="search-input" id="dcSearch" placeholder="Search by name, phone, or region...">
+                    </div>
+                    <div class="table-container" id="dcsTableContainer">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            Loading Data Collectors...
+                        </div>
+                    </div>
+                    <div class="pagination" id="dcsPagination"></div>
+                </div>
+
+                <!-- Employees Page -->
+                <div class="page" id="employees-page">
+                    <div class="search-bar">
+                        <input type="text" class="search-input" id="empSearch" placeholder="Search by name, phone, or department...">
+                    </div>
+                    <div class="table-container" id="employeesTableContainer">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            Loading Employees...
+                        </div>
+                    </div>
+                    <div class="pagination" id="employeesPagination"></div>
+                </div>
+
+                <!-- Allowed Numbers Page -->
+                <div class="page" id="allowed-numbers-page">
+                    <div class="search-bar">
+                        <input type="text" class="search-input" id="numbersSearch" placeholder="Search by DC name or phone number...">
+                    </div>
+                    <div class="table-container" id="numbersTableContainer">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            Loading Allowed Numbers...
+                        </div>
+                    </div>
+                    <div class="pagination" id="numbersPagination"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal" id="formModal">
+        <div class="modal-content">
+            <div class="modal-header" id="modalTitle">Add Data Collector</div>
+            <form id="dataForm" onsubmit="handleSubmit(event)">
+                <div id="formFields"></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="submitBtn">Add</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div class="modal" id="confirmModal">
+        <div class="modal-content">
+            <div class="modal-header">Confirm Delete</div>
+            <p id="confirmMessage" style="margin-bottom: 20px; color: var(--eko-gray-700);">Are you sure you want to delete this item?</p>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeConfirm()">Cancel</button>
+                <button class="btn-danger" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State management
+        const state = {
+            currentPage: 'dcs',
+            currentAction: 'add', // 'add' or 'edit'
+            editingId: null,
+            dcs: [],
+            employees: [],
+            allowedNumbers: [],
+            dcsPage: 1,
+            employeesPage: 1,
+            numbersPage: 1,
+            dcsSearch: '',
+            employeesSearch: '',
+            numbersSearch: '',
+            itemsPerPage: 25,
+            pendingDelete: null,
+        };
+
+        const API_BASE = 'http://localhost:8000';
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            setupEventListeners();
+            loadDCs();
+        });
+
+        // Event Listeners
+        function setupEventListeners() {
+            // Navigation
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.addEventListener('click', () => navigateTo(item.dataset.page));
+            });
+
+            // Search
+            document.getElementById('dcSearch').addEventListener('input', (e) => {
+                state.dcsSearch = e.target.value.toLowerCase();
+                state.dcsPage = 1;
+                renderDCsTable();
+            });
+
+            document.getElementById('empSearch').addEventListener('input', (e) => {
+                state.employeesSearch = e.target.value.toLowerCase();
+                state.employeesPage = 1;
+                renderEmployeesTable();
+            });
+
+            document.getElementById('numbersSearch').addEventListener('input', (e) => {
+                state.numbersSearch = e.target.value.toLowerCase();
+                state.numbersPage = 1;
+                renderAllowedNumbersTable();
+            });
+
+            // Modal close on background click
+            document.getElementById('formModal').addEventListener('click', (e) => {
+                if (e.target.id === 'formModal') closeModal();
+            });
+
+            document.getElementById('confirmModal').addEventListener('click', (e) => {
+                if (e.target.id === 'confirmModal') closeConfirm();
+            });
+        }
+
+        // Navigation
+        function navigateTo(page) {
+            state.currentPage = page;
+
+            // Update sidebar
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+                if (item.dataset.page === page) item.classList.add('active');
+            });
+
+            // Update pages
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById(`${page}-page`).classList.add('active');
+
+            // Update header
+            const titles = {
+                dcs: 'Data Collectors',
+                employees: 'Employees',
+                'allowed-numbers': 'Allowed Numbers'
+            };
+            document.getElementById('pageTitle').textContent = titles[page];
+
+            // Clear form for new page
+            closeModal();
+
+            // Load data
+            if (page === 'dcs') loadDCs();
+            else if (page === 'employees') loadEmployees();
+            else if (page === 'allowed-numbers') loadAllowedNumbers();
+        }
+
+        // API Calls
+        async function loadDCs() {
+            try {
+                const response = await fetch(`${API_BASE}/api/dcs`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                state.dcs = await response.json();
+                renderDCsTable();
+            } catch (err) {
+                showAlert(`Failed to load DCs: ${err.message}`, 'error');
+                document.getElementById('dcsTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">⚠️</div><p>Failed to load data</p></div>';
+            }
+        }
+
+        async function loadEmployees() {
+            try {
+                const response = await fetch(`${API_BASE}/api/employees`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                state.employees = await response.json();
+                renderEmployeesTable();
+            } catch (err) {
+                showAlert(`Failed to load employees: ${err.message}`, 'error');
+                document.getElementById('employeesTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">⚠️</div><p>Failed to load data</p></div>';
+            }
+        }
+
+        async function loadAllowedNumbers() {
+            try {
+                const response = await fetch(`${API_BASE}/api/allowed-numbers`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                state.allowedNumbers = await response.json();
+                renderAllowedNumbersTable();
+            } catch (err) {
+                showAlert(`Failed to load allowed numbers: ${err.message}`, 'error');
+                document.getElementById('numbersTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">⚠️</div><p>Failed to load data</p></div>';
+            }
+        }
+
+        // Rendering
+        function renderDCsTable() {
+            const filtered = state.dcs.filter(dc =>
+                (dc.name.toLowerCase().includes(state.dcsSearch)) ||
+                (dc.phone.includes(state.dcsSearch)) ||
+                (dc.region.toLowerCase().includes(state.dcsSearch))
+            );
+
+            const start = (state.dcsPage - 1) * state.itemsPerPage;
+            const end = start + state.itemsPerPage;
+            const page = filtered.slice(start, end);
+
+            if (filtered.length === 0) {
+                document.getElementById('dcsTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No Data Collectors found</p></div>';
+                document.getElementById('dcsPagination').innerHTML = '';
+                return;
+            }
+
+            const html = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Phone</th>
+                            <th>Region</th>
+                            <th>Status</th>
+                            <th>Created By</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${page.map(dc => `
+                            <tr>
+                                <td>${dc.name}</td>
+                                <td>${dc.phone}</td>
+                                <td>${dc.region}</td>
+                                <td><span class="status-badge status-${dc.active ? 'active' : 'inactive'}">${dc.active ? 'Active' : 'Inactive'}</span></td>
+                                <td>${dc.created_by || '-'}</td>
+                                <td>
+                                    <div class="actions">
+                                        <button class="btn-sm btn-edit" onclick="editDC(${dc.id})">Edit</button>
+                                        <button class="btn-sm btn-delete" onclick="deleteDC(${dc.id}, '${dc.name}')">Delete</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            document.getElementById('dcsTableContainer').innerHTML = html;
+
+            // Pagination
+            const totalPages = Math.ceil(filtered.length / state.itemsPerPage);
+            renderPagination('dcsPagination', state.dcsPage, totalPages, (p) => {
+                state.dcsPage = p;
+                renderDCsTable();
+            });
+        }
+
+        function renderEmployeesTable() {
+            const filtered = state.employees.filter(emp =>
+                (emp.name.toLowerCase().includes(state.employeesSearch)) ||
+                (emp.phone.includes(state.employeesSearch)) ||
+                (emp.department.toLowerCase().includes(state.employeesSearch))
+            );
+
+            const start = (state.employeesPage - 1) * state.itemsPerPage;
+            const end = start + state.itemsPerPage;
+            const page = filtered.slice(start, end);
+
+            if (filtered.length === 0) {
+                document.getElementById('employeesTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No Employees found</p></div>';
+                document.getElementById('employeesPagination').innerHTML = '';
+                return;
+            }
+
+            const html = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Phone</th>
+                            <th>Department</th>
+                            <th>Status</th>
+                            <th>Created By</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${page.map(emp => `
+                            <tr>
+                                <td>${emp.name}</td>
+                                <td>${emp.phone}</td>
+                                <td>${emp.department}</td>
+                                <td><span class="status-badge status-${emp.active ? 'active' : 'inactive'}">${emp.active ? 'Active' : 'Inactive'}</span></td>
+                                <td>${emp.created_by || '-'}</td>
+                                <td>
+                                    <div class="actions">
+                                        <button class="btn-sm btn-edit" onclick="editEmployee(${emp.id})">Edit</button>
+                                        <button class="btn-sm btn-delete" onclick="deleteEmployee(${emp.id}, '${emp.name}')">Delete</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            document.getElementById('employeesTableContainer').innerHTML = html;
+
+            const totalPages = Math.ceil(filtered.length / state.itemsPerPage);
+            renderPagination('employeesPagination', state.employeesPage, totalPages, (p) => {
+                state.employeesPage = p;
+                renderEmployeesTable();
+            });
+        }
+
+        function renderAllowedNumbersTable() {
+            const filtered = state.allowedNumbers.filter(num =>
+                (num.phone_number.includes(state.numbersSearch)) ||
+                (state.dcs.find(dc => dc.id === num.dc_id)?.name.toLowerCase().includes(state.numbersSearch))
+            );
+
+            const start = (state.numbersPage - 1) * state.itemsPerPage;
+            const end = start + state.itemsPerPage;
+            const page = filtered.slice(start, end);
+
+            if (filtered.length === 0) {
+                document.getElementById('numbersTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No Allowed Numbers found</p></div>';
+                document.getElementById('numbersPagination').innerHTML = '';
+                return;
+            }
+
+            const html = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>DC Name</th>
+                            <th>Phone Number</th>
+                            <th>Description</th>
+                            <th>Added By</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${page.map(num => {
+                            const dc = state.dcs.find(d => d.id === num.dc_id);
+                            return `
+                            <tr>
+                                <td>${dc?.name || '-'}</td>
+                                <td>${num.phone_number}</td>
+                                <td>${num.description || '-'}</td>
+                                <td>${num.added_by || '-'}</td>
+                                <td>
+                                    <div class="actions">
+                                        <button class="btn-sm btn-delete" onclick="deleteNumber(${num.id}, '${num.phone_number}')">Delete</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+            document.getElementById('numbersTableContainer').innerHTML = html;
+
+            const totalPages = Math.ceil(filtered.length / state.itemsPerPage);
+            renderPagination('numbersPagination', state.numbersPage, totalPages, (p) => {
+                state.numbersPage = p;
+                renderAllowedNumbersTable();
+            });
+        }
+
+        function renderPagination(containerId, current, total, callback) {
+            if (total <= 1) return;
+
+            let html = '';
+            html += `<button ${current === 1 ? 'disabled' : 'onclick="arguments[0](' + (current - 1) + ')"'}>← Prev</button>`;
+
+            for (let i = 1; i <= total; i++) {
+                if (i >= current - 2 && i <= current + 2) {
+                    html += `<button class="${i === current ? 'active' : ''}" onclick="arguments[0](' + i + ')">${i}</button>`;
+                }
+            }
+
+            html += `<button ${current === total ? 'disabled' : 'onclick="arguments[0](' + (current + 1) + ')"'}>Next →</button>`;
+
+            const container = document.getElementById(containerId);
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = html;
+
+            tempDiv.querySelectorAll('button').forEach(btn => {
+                if (!btn.disabled && btn.textContent !== '← Prev' && btn.textContent !== 'Next →') {
+                    btn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const page = parseInt(btn.textContent);
+                        callback(page);
+                    });
+                } else if (btn.textContent === '← Prev' && !btn.disabled) {
+                    btn.addEventListener('click', () => callback(current - 1));
+                } else if (btn.textContent === 'Next →' && !btn.disabled) {
+                    btn.addEventListener('click', () => callback(current + 1));
+                }
+            });
+
+            container.innerHTML = tempDiv.innerHTML;
+        }
+
+        // Modal Management
+        function openModal() {
+            state.currentAction = 'add';
+            state.editingId = null;
+
+            if (state.currentPage === 'dcs') {
+                document.getElementById('modalTitle').textContent = 'Add Data Collector';
+                document.getElementById('submitBtn').textContent = 'Add';
+                document.getElementById('formFields').innerHTML = `
+                    <div class="form-group">
+                        <label>Name *</label>
+                        <input type="text" name="name" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Phone *</label>
+                        <input type="tel" name="phone" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" name="email">
+                    </div>
+                    <div class="form-group">
+                        <label>Region</label>
+                        <input type="text" name="region">
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select name="active">
+                            <option value="1">Active</option>
+                            <option value="0">Inactive</option>
+                        </select>
+                    </div>
+                `;
+            } else if (state.currentPage === 'employees') {
+                document.getElementById('modalTitle').textContent = 'Add Employee';
+                document.getElementById('submitBtn').textContent = 'Add';
+                document.getElementById('formFields').innerHTML = `
+                    <div class="form-group">
+                        <label>Name *</label>
+                        <input type="text" name="name" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Phone *</label>
+                        <input type="tel" name="phone" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" name="email">
+                    </div>
+                    <div class="form-group">
+                        <label>Department</label>
+                        <input type="text" name="department">
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select name="active">
+                            <option value="1">Active</option>
+                            <option value="0">Inactive</option>
+                        </select>
+                    </div>
+                `;
+            } else if (state.currentPage === 'allowed-numbers') {
+                document.getElementById('modalTitle').textContent = 'Add Allowed Number';
+                document.getElementById('submitBtn').textContent = 'Add';
+                document.getElementById('formFields').innerHTML = `
+                    <div class="form-group">
+                        <label>Data Collector *</label>
+                        <select name="dc_id" required>
+                            <option value="">Select DC...</option>
+                            ${state.dcs.map(dc => `<option value="${dc.id}">${dc.name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Phone Number *</label>
+                        <input type="tel" name="phone_number" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <input type="text" name="description">
+                    </div>
+                `;
+            }
+
+            document.getElementById('formModal').classList.add('active');
+        }
+
+        function editDC(id) {
+            const dc = state.dcs.find(d => d.id === id);
+            if (!dc) return;
+
+            state.currentAction = 'edit';
+            state.editingId = id;
+
+            document.getElementById('modalTitle').textContent = `Edit Data Collector`;
+            document.getElementById('submitBtn').textContent = 'Save Changes';
+            document.getElementById('formFields').innerHTML = `
+                <div class="form-group">
+                    <label>Name *</label>
+                    <input type="text" name="name" value="${dc.name}" required>
+                </div>
+                <div class="form-group">
+                    <label>Phone *</label>
+                    <input type="tel" name="phone" value="${dc.phone}" required>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" name="email" value="${dc.email || ''}">
+                </div>
+                <div class="form-group">
+                    <label>Region</label>
+                    <input type="text" name="region" value="${dc.region || ''}">
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <select name="active">
+                        <option value="1" ${dc.active ? 'selected' : ''}>Active</option>
+                        <option value="0" ${!dc.active ? 'selected' : ''}>Inactive</option>
+                    </select>
+                </div>
+            `;
+
+            document.getElementById('formModal').classList.add('active');
+        }
+
+        function editEmployee(id) {
+            const emp = state.employees.find(e => e.id === id);
+            if (!emp) return;
+
+            state.currentAction = 'edit';
+            state.editingId = id;
+
+            document.getElementById('modalTitle').textContent = `Edit Employee`;
+            document.getElementById('submitBtn').textContent = 'Save Changes';
+            document.getElementById('formFields').innerHTML = `
+                <div class="form-group">
+                    <label>Name *</label>
+                    <input type="text" name="name" value="${emp.name}" required>
+                </div>
+                <div class="form-group">
+                    <label>Phone *</label>
+                    <input type="tel" name="phone" value="${emp.phone}" required>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" name="email" value="${emp.email || ''}">
+                </div>
+                <div class="form-group">
+                    <label>Department</label>
+                    <input type="text" name="department" value="${emp.department || ''}">
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <select name="active">
+                        <option value="1" ${emp.active ? 'selected' : ''}>Active</option>
+                        <option value="0" ${!emp.active ? 'selected' : ''}>Inactive</option>
+                    </select>
+                </div>
+            `;
+
+            document.getElementById('formModal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('formModal').classList.remove('active');
+        }
+
+        // Form Submission
+        async function handleSubmit(e) {
+            e.preventDefault();
+            const formData = new FormData(document.getElementById('dataForm'));
+            const data = Object.fromEntries(formData);
+
+            // Convert active to boolean
+            if ('active' in data) data.active = data.active === '1';
+            if ('dc_id' in data) data.dc_id = parseInt(data.dc_id);
+
+            try {
+                let url, method, endpoint;
+
+                if (state.currentPage === 'dcs') {
+                    endpoint = '/api/dcs';
+                    if (state.currentAction === 'add') {
+                        method = 'POST';
+                        url = `${API_BASE}${endpoint}`;
+                    } else {
+                        method = 'PATCH';
+                        url = `${API_BASE}${endpoint}/${state.editingId}`;
+                    }
+                } else if (state.currentPage === 'employees') {
+                    endpoint = '/api/employees';
+                    if (state.currentAction === 'add') {
+                        method = 'POST';
+                        url = `${API_BASE}${endpoint}`;
+                    } else {
+                        method = 'PATCH';
+                        url = `${API_BASE}${endpoint}/${state.editingId}`;
+                    }
+                } else if (state.currentPage === 'allowed-numbers') {
+                    endpoint = '/api/allowed-numbers';
+                    method = 'POST';
+                    url = `${API_BASE}${endpoint}`;
+                }
+
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+
+                showAlert(`${state.currentAction === 'add' ? 'Added' : 'Updated'} successfully!`, 'success');
+                closeModal();
+
+                if (state.currentPage === 'dcs') loadDCs();
+                else if (state.currentPage === 'employees') loadEmployees();
+                else if (state.currentPage === 'allowed-numbers') loadAllowedNumbers();
+            } catch (err) {
+                showAlert(`Error: ${err.message}`, 'error');
+            }
+        }
+
+        // Delete operations
+        function deleteDC(id, name) {
+            state.pendingDelete = { id, endpoint: '/api/dcs', type: 'dcs' };
+            document.getElementById('confirmMessage').textContent = `Delete DC "${name}"? This action cannot be undone.`;
+            document.getElementById('confirmModal').classList.add('active');
+        }
+
+        function deleteEmployee(id, name) {
+            state.pendingDelete = { id, endpoint: '/api/employees', type: 'employees' };
+            document.getElementById('confirmMessage').textContent = `Delete Employee "${name}"? This action cannot be undone.`;
+            document.getElementById('confirmModal').classList.add('active');
+        }
+
+        function deleteNumber(id, number) {
+            state.pendingDelete = { id, endpoint: '/api/allowed-numbers', type: 'numbers' };
+            document.getElementById('confirmMessage').textContent = `Delete phone number "${number}"? This action cannot be undone.`;
+            document.getElementById('confirmModal').classList.add('active');
+        }
+
+        async function confirmDelete() {
+            const { id, endpoint, type } = state.pendingDelete;
+
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+
+                showAlert('Deleted successfully!', 'success');
+                closeConfirm();
+
+                if (type === 'dcs') loadDCs();
+                else if (type === 'employees') loadEmployees();
+                else if (type === 'numbers') loadAllowedNumbers();
+            } catch (err) {
+                showAlert(`Error: ${err.message}`, 'error');
+            }
+        }
+
+        function closeConfirm() {
+            document.getElementById('confirmModal').classList.remove('active');
+            state.pendingDelete = null;
+        }
+
+        // Alerts
+        function showAlert(message, type) {
+            const container = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.textContent = message;
+            container.appendChild(alert);
+
+            setTimeout(() => {
+                alert.remove();
+            }, 4000);
+        }
+    </script>
+</body>
+</html>
