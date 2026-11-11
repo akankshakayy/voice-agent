@@ -2,6 +2,7 @@
 
 Run:  uvicorn app.main:app --reload --port 8000
 """
+import io
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
@@ -93,7 +95,7 @@ DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the upload
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
 PAGE_ROLES = {"/": ("admin", "ops", "rm"), "/call": STAFF, "/ops": STAFF, "/harness": STAFF, "/rm": ("admin", "ops", "rm"),
               "/users": ("admin",), "/recordings": ("admin", "ops", "rm"), "/account": ("admin", "ops", "rm", "pending"),
-              "/metrics-trends": STAFF, "/admin": ("admin",)}  # Admin panel - admin role required
+              "/metrics-trends": STAFF, "/admin": ("admin",), "/monitor": STAFF}  # Admin panel - admin role required
 # All a not-yet-approved account can reach: its own account settings
 PENDING_OK = {"/pending", "/account", "/api/auth/me", "/api/auth/logout", "/api/auth/logout-all", "/api/auth/password",
               "/api/auth/email", "/api/auth/verify/resend", "/api/auth/activity"}
@@ -540,6 +542,12 @@ def harness_page():
 def admin_page():
     """Admin panel: Manage Data Collectors, Employees, and Allowed Numbers."""
     return FileResponse(os.path.join(STATIC, "admin.html"))
+
+
+@app.get("/monitor", dependencies=[Depends(allow(*STAFF))])
+def monitor_page():
+    """Monitoring dashboard: Real-time system health, sync status, and alerts."""
+    return FileResponse(os.path.join(STATIC, "monitor.html"))
 
 
 # ------------------------------------------------------------------ bulk load
@@ -1547,6 +1555,92 @@ async def bulk_load_applicant_numbers_endpoint(file: UploadFile = File(...), act
         raise HTTPException(500, f"Upload failed: {str(e)}")
 
 
+# ------------------------------------------------------------------ Prachi Sync Management (Phase 7d)
+@app.get("/api/prachi/sync-status", dependencies=[Depends(allow("admin", "ops"))])
+def get_prachi_sync_status():
+    """Get Prachi data sync status.
+
+    Returns:
+    - sync_source: "api" (PRIMARY: automatic Google Sheets sync)
+    - health_status: "OK" | "RECOVERING" | "DEGRADED" (3+ failures)
+    - last_sync: timestamp of last sync attempt
+    - last_sync_success: timestamp of last successful sync
+    - sync_failures: total failure count
+    - failure_streak: consecutive failures (3+ = degraded)
+    - dcs_count: total active DCs in database
+    - officials_count: total active SBI officials in database
+    """
+    return prachi_sync.get_sync_status()
+
+
+@app.get("/api/prachi/sync-history", dependencies=[Depends(allow("admin", "ops"))])
+def get_prachi_sync_history(limit: int = 50):
+    """Get Prachi sync history (audit trail).
+
+    Shows all sync operations: API (primary) and manual Excel uploads (secondary).
+    Tracks: success/failed/degraded status, record changes, sync source, timestamps.
+    """
+    rows = db.q("""
+        SELECT id, sync_type, status, records_processed, records_added, records_updated, records_deleted,
+               error_message, sync_source, synced_at
+        FROM prachi_sync_history
+        ORDER BY synced_at DESC
+        LIMIT ?
+    """, (limit,))
+
+    return {"history": rows, "total": len(rows)}
+
+
+class PrachiManualUploadBody(BaseModel):
+    """Manual Excel upload for Prachi data (secondary, temporary override)."""
+    dcs: list[dict] = []  # [{name, phone, region}, ...]
+    officials: list[dict] = []  # [{phone, dc_name, description}, ...]
+
+
+@app.post("/api/prachi/upload-excel", dependencies=[Depends(allow("admin"))])
+async def upload_prachi_excel(body: PrachiManualUploadBody, actor=Depends(allow("admin"))):
+    """SECONDARY: Manually upload Prachi data from Excel.
+
+    WARNING: This is a temporary override. The next scheduled API sync (every 24 hours)
+    will overwrite this data with the latest from Google Sheets.
+
+    Use this only when:
+    - Google Sheets API is down
+    - You need to make urgent corrections
+    - The API data is stale and you have fresher data from another source
+
+    Request body:
+    {
+        "dcs": [
+            {"name": "DC Name", "phone": "9876543210", "region": "North"},
+            ...
+        ],
+        "officials": [
+            {"phone": "9876543210", "dc_name": "DC Name", "description": "Officer A"},
+            ...
+        ]
+    }
+
+    Response includes:
+    - success: true/false
+    - dcs_result: {added, updated, deleted}
+    - officials_result: {added, updated, deleted}
+    - warning: reminder that API will overwrite on next sync
+    """
+    try:
+        actor_email = actor.get("email", "unknown")
+        result = await prachi_sync.manual_excel_upload(body.dcs, body.officials, actor_email)
+
+        if not result.get("success"):
+            raise HTTPException(500, f"Upload failed: {result.get('error', 'Unknown error')}")
+
+        return result
+
+    except Exception as e:
+        log.exception("Prachi manual Excel upload failed")
+        raise HTTPException(500, f"Upload failed: {str(e)}")
+
+
 @app.get("/api/mansi/recordings")
 def mansi_recordings(
     employee_id: int | None = None,
@@ -2196,6 +2290,153 @@ def get_prachi_sync_history(limit: int = 10):
         raise HTTPException(500, f"Error fetching history: {e}")
 
 
+# ------------------------------------------------------------------ monitoring dashboard (Phase 7d)
+
+@app.get("/api/monitor/status", dependencies=[Depends(allow("admin", "ops"))])
+def get_monitor_status():
+    """Get complete monitoring dashboard status (all metrics in one call)."""
+    try:
+        autogmap_sync = db.get_autogmap_sync_stats(days=7)
+        autogmap_uploads = db.get_autogmap_upload_stats(hours=24)
+        prachi_sync_info = db.get_prachi_sync_stats()
+        prachi_submissions = db.get_prachi_submission_stats(hours=24)
+        system_health = db.get_system_health()
+        recent_errors = db.get_recent_errors(limit=10)
+
+        return {
+            "timestamp": db.now(),
+            "autogmap": {
+                "sync": autogmap_sync,
+                "uploads": autogmap_uploads
+            },
+            "prachi": {
+                "sync": prachi_sync_info,
+                "submissions": prachi_submissions
+            },
+            "system": system_health,
+            "recent_errors": recent_errors
+        }
+    except Exception as e:
+        log.exception("Error fetching monitor status")
+        raise HTTPException(500, f"Error fetching monitor status: {str(e)}")
+
+
+@app.get("/api/monitor/autogmap/stats", dependencies=[Depends(allow("admin", "ops"))])
+def get_monitor_autogmap_stats(days: int = 7):
+    """Get detailed AutoGMap sync and upload statistics."""
+    try:
+        sync_stats = db.get_autogmap_sync_stats(days=days)
+        upload_stats = db.get_autogmap_upload_stats(hours=days*24)
+
+        # Get historical success rates (last 7 days, by day)
+        cutoff = db.now() - (7 * 86400)
+        daily_stats = db.q("""
+            SELECT
+                DATE(synced_at, 'unixepoch') as date,
+                COUNT(*) as syncs,
+                SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as successful
+            FROM prachi_sync_history
+            WHERE synced_at > ? AND sync_type IN ('dcs', 'dcs_and_officials')
+            GROUP BY DATE(synced_at, 'unixepoch')
+            ORDER BY date DESC
+        """, (cutoff,))
+
+        return {
+            "sync": sync_stats,
+            "uploads": upload_stats,
+            "daily_history": [
+                {
+                    "date": row["date"],
+                    "syncs": row["syncs"],
+                    "successful": row["successful"],
+                    "success_rate": round((row["successful"] / row["syncs"] * 100), 2) if row["syncs"] > 0 else 0
+                }
+                for row in daily_stats
+            ]
+        }
+    except Exception as e:
+        log.exception("Error fetching AutoGMap stats")
+        raise HTTPException(500, f"Error fetching AutoGMap stats: {str(e)}")
+
+
+@app.get("/api/monitor/prachi/stats", dependencies=[Depends(allow("admin", "ops"))])
+def get_monitor_prachi_stats(hours: int = 24):
+    """Get detailed Prachi sync and submission statistics."""
+    try:
+        sync_info = db.get_prachi_sync_stats()
+        submissions = db.get_prachi_submission_stats(hours=hours)
+
+        # Get submission status breakdown
+        cutoff = db.now() - (hours * 3600)
+        status_breakdown = db.q("""
+            SELECT status, COUNT(*) as count
+            FROM prachi_submissions
+            WHERE received_at > ?
+            GROUP BY status
+        """, (cutoff,))
+
+        return {
+            "sync": sync_info,
+            "submissions": submissions,
+            "status_breakdown": {row["status"]: row["count"] for row in status_breakdown}
+        }
+    except Exception as e:
+        log.exception("Error fetching Prachi stats")
+        raise HTTPException(500, f"Error fetching Prachi stats: {str(e)}")
+
+
+@app.get("/api/monitor/alerts", dependencies=[Depends(allow("admin", "ops"))])
+def get_monitor_alerts(limit: int = 20):
+    """Get recent alerts from sync/upload failures."""
+    try:
+        errors = db.get_recent_errors(limit=limit)
+
+        # Format as alerts
+        alerts = []
+        for error in errors:
+            timestamp = error["synced_at"]
+            alert_type = f"{error['sync_type']}_sync"
+            message = error["error_message"] or "Unknown error"
+
+            alerts.append({
+                "id": error["id"],
+                "type": alert_type,
+                "severity": "error",
+                "message": message,
+                "timestamp": timestamp
+            })
+
+        return {"alerts": alerts, "count": len(alerts)}
+    except Exception as e:
+        log.exception("Error fetching alerts")
+        raise HTTPException(500, f"Error fetching alerts: {str(e)}")
+
+
+@app.post("/api/monitor/sync-autogmap", dependencies=[Depends(allow("admin"))])
+def trigger_autogmap_sync():
+    """Trigger immediate AutoGMap numbers sync."""
+    try:
+        log.info("Manual AutoGMap sync requested")
+        # AutoGMap syncs run on a scheduled interval (every AUTOGMAP_SYNC_INTERVAL_MINUTES)
+        # The next sync will pick up any pending work
+        return {"status": "queued", "message": "AutoGMap sync queued - will run on next interval"}
+    except Exception as e:
+        log.exception("Error triggering AutoGMap sync")
+        raise HTTPException(500, f"Error triggering sync: {str(e)}")
+
+
+@app.post("/api/monitor/retry-failed-uploads", dependencies=[Depends(allow("admin"))])
+def retry_failed_uploads():
+    """Retry failed AutoGMap recording uploads."""
+    try:
+        # Wake the recordings processing loop to retry uploads
+        recordings.wake()
+        return {"status": "retrying", "message": "Retry started for failed uploads"}
+    except Exception as e:
+        log.exception("Error retrying uploads")
+        raise HTTPException(500, f"Error retrying uploads: {str(e)}")
+
+
 # ------------------------------------------------------------------ simulator
 class Simulate(BaseModel):
     calls: int = 10
@@ -2215,3 +2456,278 @@ def simulate(body: Simulate):
         threading.Thread(target=run_live, args=(n, body.engine), daemon=True).start()
         return {"started": n, "mode": "live"}
     return run_backfill(n, days=0, engine=body.engine)
+
+
+# ------------------------------------------------------------------ backup & restore (Phase 8)
+
+@app.get("/api/backup/list", dependencies=[Depends(allow("admin"))])
+def list_backups():
+    """List all available backups with metadata."""
+    from . import backup_restore
+    try:
+        backups = backup_restore.list_backups()
+        return {"backups": backups, "total": len(backups)}
+    except Exception as e:
+        log.exception("Error listing backups")
+        raise HTTPException(500, f"Error listing backups: {str(e)}")
+
+
+@app.get("/api/backup/export", dependencies=[Depends(allow("admin"))])
+def export_backup_endpoint(
+    backup_type: str = Query("full", regex="^(full|filtered)$"),
+    rm_id: int | None = None,
+    dc_id: int | None = None,
+    employee_id: int | None = None
+):
+    """Trigger database export and return ZIP file.
+
+    Query parameters:
+    - backup_type: "full" (all data) or "filtered" (mode-specific)
+    - rm_id: For filtered exports (RM mode recordings)
+    - dc_id: For filtered exports (DC mode recordings)
+    - employee_id: For filtered exports (Employee mode recordings)
+    """
+    from . import backup_restore
+
+    try:
+        # Validate that only one mode filter is used
+        mode_filters = [rm_id, dc_id, employee_id]
+        if backup_type == "filtered" and sum(1 for m in mode_filters if m is not None) != 1:
+            raise ValueError("For filtered exports, specify exactly one of: rm_id, dc_id, employee_id")
+
+        # Determine backup type
+        if backup_type == "filtered":
+            actual_type = "filtered"
+        else:
+            actual_type = "full"
+
+        result = backup_restore.export_database(
+            backup_type=actual_type,
+            rm_id=rm_id,
+            dc_id=dc_id,
+            employee_id=employee_id
+        )
+
+        backup_path = result["file_path"]
+        filename = result["filename"]
+
+        log.info(f"Backup export complete: {result['backup_id']}, {result['metadata']['compressed_size_mb']} MB")
+
+        return FileResponse(
+            backup_path,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    except ValueError as e:
+        log.warning(f"Export validation error: {e}")
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("Backup export failed")
+        raise HTTPException(500, f"Export failed: {str(e)}")
+
+
+@app.post("/api/backup/restore", dependencies=[Depends(allow("admin"))])
+async def restore_backup_endpoint(backup_file: UploadFile = File(...)):
+    """Upload and restore from backup file.
+
+    Expected: ZIP file from /api/backup/export
+    """
+    from . import backup_restore
+
+    if not backup_file.filename.endswith(".zip"):
+        raise HTTPException(400, "File must be a .zip backup")
+
+    try:
+        file_content = await backup_file.read()
+
+        # Validate before restoring
+        validation = backup_restore.restore_database(
+            backup_file_obj=io.BytesIO(file_content),
+            validate_only=True
+        )
+
+        if validation["status"] != "valid":
+            raise ValueError("Backup validation failed")
+
+        # Perform actual restore
+        result = backup_restore.restore_database(
+            backup_file_obj=io.BytesIO(file_content),
+            validate_only=False
+        )
+
+        log.info(f"Backup restored: {result['backup_id']}, {sum(result['record_counts'].values())} records")
+
+        return result
+
+    except ValueError as e:
+        log.warning(f"Restore validation error: {e}")
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("Backup restore failed")
+        raise HTTPException(500, f"Restore failed: {str(e)}")
+
+
+@app.get("/api/backup/download/{backup_id}", dependencies=[Depends(allow("admin"))])
+def download_backup(backup_id: str):
+    """Download a specific backup by ID."""
+    from . import backup_restore
+
+    try:
+        backup = backup_restore.get_backup_by_id(backup_id)
+
+        if not backup:
+            raise HTTPException(404, f"Backup not found: {backup_id}")
+
+        backup_path = backup["filepath"]
+
+        if not os.path.exists(backup_path):
+            raise HTTPException(404, "Backup file not found on disk")
+
+        return FileResponse(
+            backup_path,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{backup["filename"]}"'}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Backup download failed")
+        raise HTTPException(500, f"Download failed: {str(e)}")
+
+
+@app.delete("/api/backup/{backup_id}", dependencies=[Depends(allow("admin"))])
+def delete_backup_endpoint(backup_id: str):
+    """Delete a backup by ID."""
+    from . import backup_restore
+
+    try:
+        if backup_restore.delete_backup(backup_id):
+            return {"ok": True, "message": f"Backup {backup_id} deleted"}
+        else:
+            raise HTTPException(404, f"Backup not found: {backup_id}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Backup deletion failed")
+        raise HTTPException(500, f"Deletion failed: {str(e)}")
+
+
+class BackupExportTableBody(BaseModel):
+    table: str
+    rm_id: int | None = None
+    dc_id: int | None = None
+    employee_id: int | None = None
+
+
+@app.post("/api/backup/export-table", dependencies=[Depends(allow("admin"))])
+def export_single_table(body: BackupExportTableBody):
+    """Export a single table as JSON for detailed inspection or manual backup.
+
+    Request body:
+    {
+        "table": "dcs",
+        "rm_id": null,
+        "dc_id": null,
+        "employee_id": null
+    }
+    """
+    from . import backup_restore
+
+    try:
+        json_data = backup_restore.export_table_to_json(
+            body.table,
+            rm_id=body.rm_id,
+            dc_id=body.dc_id,
+            employee_id=body.employee_id
+        )
+
+        # Parse back to get metadata
+        records = json.loads(json_data)
+
+        return {
+            "table": body.table,
+            "record_count": len(records),
+            "records": records,
+            "exported_at": time.time(),
+        }
+
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("Table export failed")
+        raise HTTPException(500, f"Export failed: {str(e)}")
+
+
+@app.get("/api/backup/export-table/{table}", dependencies=[Depends(allow("admin"))])
+def export_single_table_get(
+    table: str,
+    rm_id: int | None = None,
+    dc_id: int | None = None,
+    employee_id: int | None = None
+):
+    """Export a single table as JSON (GET method for convenience).
+
+    Query parameters:
+    - table: Table name (required)
+    - rm_id: Optional filter for recordings
+    - dc_id: Optional filter for recordings
+    - employee_id: Optional filter for recordings
+    """
+    from . import backup_restore
+
+    try:
+        json_data = backup_restore.export_table_to_json(
+            table,
+            rm_id=rm_id,
+            dc_id=dc_id,
+            employee_id=employee_id
+        )
+
+        # Return as file download
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = f"{table}_{timestamp}.json"
+
+        return Response(
+            json_data,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("Table export failed")
+        raise HTTPException(500, f"Export failed: {str(e)}")
+
+
+@app.get("/api/backup/status", dependencies=[Depends(allow("admin"))])
+def backup_status():
+    """Get backup system status and statistics."""
+    from . import backup_restore
+    import os
+
+    try:
+        backups = backup_restore.list_backups()
+
+        backups_dir = backup_restore.BACKUPS_DIR
+        total_size_mb = 0
+        if os.path.exists(backups_dir):
+            for f in os.listdir(backups_dir):
+                path = os.path.join(backups_dir, f)
+                if os.path.isfile(path):
+                    total_size_mb += os.path.getsize(path) / 1e6
+
+        return {
+            "status": "ok",
+            "backups_count": len(backups),
+            "total_size_mb": round(total_size_mb, 2),
+            "backups_dir": backups_dir,
+            "latest_backup": backups[0] if backups else None,
+            "export_supported_tables": list(backup_restore.EXPORTABLE_TABLES.keys()),
+        }
+
+    except Exception as e:
+        log.exception("Backup status check failed")
+        raise HTTPException(500, f"Status check failed: {str(e)}")

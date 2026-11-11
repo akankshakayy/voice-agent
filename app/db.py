@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS employees (        -- Employees (for Employee mode up
 );
 CREATE TABLE IF NOT EXISTS allowed_numbers (  -- Phone numbers DCs can upload from
     id INTEGER PRIMARY KEY, dc_id INTEGER REFERENCES dcs(id), phone_number TEXT NOT NULL,
-    description TEXT, added_by TEXT, added_at REAL, UNIQUE(dc_id, phone_number)
+    description TEXT, added_by TEXT, added_at REAL, active INTEGER DEFAULT 1, UNIQUE(dc_id, phone_number)
 );
 CREATE TABLE IF NOT EXISTS dc_consents (      -- One-time consent tracking for DC mode
     id INTEGER PRIMARY KEY, dc_id INTEGER REFERENCES dcs(id), call_phone TEXT,
@@ -262,6 +262,18 @@ CREATE TABLE IF NOT EXISTS corrections (      -- a person changed something the 
 CREATE TABLE IF NOT EXISTS misheard_blocked (  -- misheard-word pairs kept out of the prompts (app/misheard.py)
     heard TEXT, said TEXT, by TEXT, at REAL, PRIMARY KEY (heard, said)
 );
+CREATE TABLE IF NOT EXISTS prachi_sync_history (  -- Audit trail for Prachi Google Sheets syncs (app/prachi_sync.py)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sync_type TEXT,             -- 'dcs' | 'sbi_officials' | 'dcs_and_officials'
+    status TEXT,                -- 'success' | 'failed' | 'degraded'
+    records_processed INTEGER,  -- total records from the sheet
+    records_added INTEGER,      -- new records inserted
+    records_updated INTEGER,    -- existing records updated
+    records_deleted INTEGER,    -- records marked inactive (soft delete)
+    error_message TEXT,         -- error details if failed
+    sync_source TEXT,           -- 'api' | 'excel' | 'manual' (PRIMARY: api, SECONDARY: excel/manual override)
+    synced_at REAL              -- when the sync completed
+);
 CREATE INDEX IF NOT EXISTS idx_traces_call ON traces(call_id);
 CREATE INDEX IF NOT EXISTS idx_context_wipes_trace ON context_wipes(trace_id);
 CREATE INDEX IF NOT EXISTS idx_prompt_versions_hash ON prompt_versions(version_hash);
@@ -290,6 +302,8 @@ CREATE INDEX IF NOT EXISTS idx_turns_call ON turns(call_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_rm ON tickets(rm_id, status);
 CREATE INDEX IF NOT EXISTS idx_autogmap_phone ON autogmap_numbers(phone);
 CREATE INDEX IF NOT EXISTS idx_autogmap_active ON autogmap_numbers(active, synced_at DESC);
+CREATE INDEX IF NOT EXISTS idx_prachi_sync_history_status ON prachi_sync_history(status, synced_at DESC);
+CREATE INDEX IF NOT EXISTS idx_prachi_sync_history_type ON prachi_sync_history(sync_type, synced_at DESC);
 """
 
 _conn = None
@@ -424,6 +438,14 @@ def conn() -> sqlite3.Connection:
             _conn.commit()
         except Exception as e:
             pass  # Migrations may already be applied or table doesn't exist
+        # Prachi Sync Refactor: Add sync_source column to track API primary vs manual Excel override
+        try:
+            _add_columns(_conn, "prachi_sync_history", {
+                "sync_source": "TEXT"  # 'api' (primary) | 'excel' (manual override)
+            })
+            _conn.commit()
+        except Exception as e:
+            pass  # Migration may already be applied or table doesn't exist
     return _conn
 
 
@@ -475,3 +497,391 @@ def update(table: str, row_id: int, **fields):
 
 def now() -> float:
     return time.time()
+
+
+# ---- MONITORING DASHBOARD HELPERS (Phase 7d) ----
+
+def get_autogmap_sync_stats(days: int = 7) -> dict:
+    """Get AutoGMap numbers sync statistics for the last N days."""
+    cutoff = now() - (days * 86400)
+    syncs = q("""
+        SELECT
+            COUNT(*) as total_syncs,
+            SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as successful_syncs,
+            SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed_syncs,
+            MAX(synced_at) as last_sync_time
+        FROM prachi_sync_history
+        WHERE synced_at > ? AND sync_type IN ('dcs', 'dcs_and_officials')
+    """, (cutoff,), one=True)
+
+    if not syncs or syncs['total_syncs'] == 0:
+        return {
+            "last_sync_time": None,
+            "status": "UNKNOWN",
+            "total_syncs": 0,
+            "success_count": 0,
+            "failure_count": 0,
+            "success_rate": None,
+            "numbers_count": 0
+        }
+
+    success_rate = (syncs['successful_syncs'] / syncs['total_syncs']) * 100 if syncs['total_syncs'] > 0 else 0
+    numbers_count = q("SELECT COUNT(*) as count FROM autogmap_numbers WHERE active=1", one=True)['count']
+
+    # Determine status based on success rate
+    if success_rate >= 95:
+        status = "OK"
+    elif success_rate >= 50:
+        status = "DEGRADED"
+    else:
+        status = "ERROR"
+
+    return {
+        "last_sync_time": syncs['last_sync_time'],
+        "status": status,
+        "total_syncs": syncs['total_syncs'],
+        "success_count": syncs['successful_syncs'],
+        "failure_count": syncs['failed_syncs'],
+        "success_rate": round(success_rate, 2),
+        "numbers_count": numbers_count
+    }
+
+
+def get_autogmap_upload_stats(hours: int = 24) -> dict:
+    """Get recording upload statistics to AutoGMap for the last N hours."""
+    cutoff = now() - (hours * 3600)
+    uploads = q("""
+        SELECT
+            COUNT(*) as total_uploads,
+            SUM(CASE WHEN autogmap_status='uploaded' THEN 1 ELSE 0 END) as successful,
+            SUM(CASE WHEN autogmap_status='failed' THEN 1 ELSE 0 END) as failed,
+            SUM(CASE WHEN autogmap_status='pending' THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN autogmap_status='not_in_applicants' THEN 1 ELSE 0 END) as not_in_applicants,
+            AVG(CASE WHEN autogmap_sent_at IS NOT NULL THEN (autogmap_sent_at - uploaded_at) ELSE NULL END) as avg_upload_time_sec,
+            MAX(autogmap_sent_at) as last_upload_time
+        FROM recordings
+        WHERE mode='rm' AND autogmap_status IS NOT NULL AND uploaded_at > ?
+    """, (cutoff,), one=True)
+
+    if not uploads or uploads['total_uploads'] == 0:
+        return {
+            "last_upload_time": None,
+            "status": "UNKNOWN",
+            "total_uploads": 0,
+            "successful": 0,
+            "failed": 0,
+            "pending": 0,
+            "not_in_applicants": 0,
+            "success_rate": None,
+            "avg_upload_time_sec": None,
+            "retry_queue_size": 0
+        }
+
+    success_rate = (uploads['successful'] / uploads['total_uploads']) * 100 if uploads['total_uploads'] > 0 else 0
+    retry_queue = q("SELECT COUNT(*) as count FROM recordings WHERE autogmap_status='pending' AND uploaded_at > ?", (cutoff,), one=True)['count']
+
+    # Determine status
+    if success_rate >= 95:
+        status = "OK"
+    elif success_rate >= 50:
+        status = "DEGRADED"
+    else:
+        status = "ERROR"
+
+    return {
+        "last_upload_time": uploads['last_upload_time'],
+        "status": status,
+        "total_uploads": uploads['total_uploads'],
+        "successful": uploads['successful'],
+        "failed": uploads['failed'],
+        "pending": uploads['pending'],
+        "not_in_applicants": uploads['not_in_applicants'],
+        "success_rate": round(success_rate, 2),
+        "avg_upload_time_sec": round(uploads['avg_upload_time_sec'], 2) if uploads['avg_upload_time_sec'] else None,
+        "retry_queue_size": retry_queue
+    }
+
+
+def get_prachi_sync_stats() -> dict:
+    """Get Prachi Google Sheets sync statistics."""
+    # Get the last sync for each type
+    dcs_sync = q("""
+        SELECT status, synced_at, records_added, records_updated, records_deleted, error_message
+        FROM prachi_sync_history
+        WHERE sync_type IN ('dcs', 'dcs_and_officials')
+        ORDER BY synced_at DESC
+        LIMIT 1
+    """, one=True)
+
+    if not dcs_sync:
+        return {
+            "last_sync_time": None,
+            "status": "UNKNOWN",
+            "dcs_count": 0,
+            "officials_count": 0,
+            "last_changes": {
+                "dcs_added": 0,
+                "dcs_updated": 0,
+                "dcs_deleted": 0,
+                "officials_added": 0,
+                "officials_updated": 0,
+                "officials_deleted": 0
+            }
+        }
+
+    status = "OK" if dcs_sync['status'] == 'success' else "ERROR"
+    dcs_count = q("SELECT COUNT(*) as count FROM dcs WHERE active=1", one=True)['count']
+    officials_count = q("SELECT COUNT(*) as count FROM allowed_numbers WHERE active=1", one=True)['count']
+
+    return {
+        "last_sync_time": dcs_sync['synced_at'],
+        "status": status,
+        "dcs_count": dcs_count,
+        "officials_count": officials_count,
+        "last_changes": {
+            "dcs_added": dcs_sync['records_added'] if dcs_sync['records_added'] else 0,
+            "dcs_updated": dcs_sync['records_updated'] if dcs_sync['records_updated'] else 0,
+            "dcs_deleted": dcs_sync['records_deleted'] if dcs_sync['records_deleted'] else 0,
+            "officials_added": 0,
+            "officials_updated": 0,
+            "officials_deleted": 0
+        }
+    }
+
+
+def get_prachi_submission_stats(hours: int = 24) -> dict:
+    """Get Prachi API submission statistics for the last N hours."""
+    cutoff = now() - (hours * 3600)
+    submissions = q("""
+        SELECT
+            COUNT(*) as total_submissions,
+            SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as successful,
+            SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed,
+            SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending,
+            AVG(CASE WHEN processed_at IS NOT NULL THEN (processed_at - received_at) ELSE NULL END) as avg_response_time_sec,
+            MAX(received_at) as last_submission_time
+        FROM prachi_submissions
+        WHERE received_at > ?
+    """, (cutoff,), one=True)
+
+    if not submissions or submissions['total_submissions'] == 0:
+        return {
+            "last_submission_time": None,
+            "status": "UNKNOWN",
+            "total_submissions": 0,
+            "successful": 0,
+            "failed": 0,
+            "pending": 0,
+            "success_rate": None,
+            "avg_response_time_sec": None
+        }
+
+    success_rate = (submissions['successful'] / submissions['total_submissions']) * 100 if submissions['total_submissions'] > 0 else 0
+    status = "OK" if success_rate >= 95 else ("DEGRADED" if success_rate >= 50 else "ERROR")
+
+    return {
+        "last_submission_time": submissions['last_submission_time'],
+        "status": status,
+        "total_submissions": submissions['total_submissions'],
+        "successful": submissions['successful'],
+        "failed": submissions['failed'],
+        "pending": submissions['pending'],
+        "success_rate": round(success_rate, 2),
+        "avg_response_time_sec": round(submissions['avg_response_time_sec'], 2) if submissions['avg_response_time_sec'] else None
+    }
+
+
+def get_recent_errors(limit: int = 20) -> list:
+    """Get recent sync/upload errors from prachi_sync_history."""
+    errors = q("""
+        SELECT id, sync_type, status, error_message, synced_at
+        FROM prachi_sync_history
+        WHERE status='failed'
+        ORDER BY synced_at DESC
+        LIMIT ?
+    """, (limit,))
+
+    return errors
+
+
+def get_system_health() -> dict:
+    """Get overall system health status."""
+    try:
+        # Database connection check
+        test = q("SELECT 1", one=True)
+        db_status = "OK" if test else "ERROR"
+    except:
+        db_status = "ERROR"
+
+    # Get recording counts
+    recording_counts = q("""
+        SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as processed,
+            SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed,
+            SUM(CASE WHEN status='new' THEN 1 ELSE 0 END) as pending
+        FROM recordings
+    """, one=True)
+
+    # Get DC and RM counts
+    dc_count = q("SELECT COUNT(*) as count FROM dcs WHERE active=1", one=True)['count']
+    rm_count = q("SELECT COUNT(*) as count FROM rms", one=True)['count']
+
+    return {
+        "database": db_status,
+        "last_backup": None,  # Would need actual backup tracking
+        "database_size_mb": 0,  # Would need file system access
+        "recording_counts": {
+            "total": recording_counts['total'] or 0,
+            "processed": recording_counts['processed'] or 0,
+            "failed": recording_counts['failed'] or 0,
+            "pending": recording_counts['pending'] or 0
+        },
+        "dcs_count": dc_count,
+        "rms_count": rm_count
+    }
+
+
+# ---- BULK EXPORT/IMPORT HELPERS (Phase 8: Backup & Restore) ----
+
+def bulk_export_table(table: str, where_clause: str = "", args: tuple = ()) -> list[dict]:
+    """Export all rows from a table with optional filtering.
+
+    Args:
+        table: Table name
+        where_clause: Optional WHERE clause (without WHERE keyword)
+        args: Arguments for parameterized query
+
+    Returns:
+        List of dict records
+    """
+    sql = f"SELECT * FROM {table}"
+    if where_clause:
+        sql += f" WHERE {where_clause}"
+    sql += " ORDER BY id"
+    return q(sql, args)
+
+
+def bulk_export_with_join(table: str, joins: list[str], select_cols: list[str],
+                         where_clause: str = "", args: tuple = ()) -> list[dict]:
+    """Export rows from a table with joins for denormalized data.
+
+    Args:
+        table: Primary table
+        joins: List of JOIN clauses
+        select_cols: List of columns to select
+        where_clause: Optional WHERE clause
+        args: Arguments for parameterized query
+
+    Returns:
+        List of dict records
+    """
+    cols_str = ", ".join(select_cols)
+    sql = f"SELECT {cols_str} FROM {table}"
+    for join in joins:
+        sql += f" {join}"
+    if where_clause:
+        sql += f" WHERE {where_clause}"
+    sql += " ORDER BY " + table + ".id"
+    return q(sql, args)
+
+
+def bulk_import_table(table: str, records: list[dict], skip_duplicates: bool = True) -> dict:
+    """Import records into a table.
+
+    Args:
+        table: Table name
+        records: List of dict records
+        skip_duplicates: If True, skip records with duplicate unique constraints
+
+    Returns:
+        {"inserted": int, "skipped": int, "errors": list[str]}
+    """
+    if not records:
+        return {"inserted": 0, "skipped": 0, "errors": []}
+
+    inserted = 0
+    skipped = 0
+    errors = []
+
+    # Get column names from first record
+    cols = list(records[0].keys())
+    cols_str = ", ".join(cols)
+    placeholders = ", ".join(["?"] * len(cols))
+
+    for i, record in enumerate(records):
+        try:
+            values = [record.get(col) for col in cols]
+            x(f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders})", tuple(values))
+            inserted += 1
+        except sqlite3.IntegrityError as e:
+            if skip_duplicates:
+                skipped += 1
+            else:
+                errors.append(f"Row {i}: {str(e)}")
+        except Exception as e:
+            errors.append(f"Row {i}: {str(e)}")
+
+    return {
+        "inserted": inserted,
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+
+def table_record_count(table: str, where_clause: str = "", args: tuple = ()) -> int:
+    """Get the count of records in a table.
+
+    Args:
+        table: Table name
+        where_clause: Optional WHERE clause
+        args: Arguments for parameterized query
+
+    Returns:
+        Record count
+    """
+    sql = f"SELECT COUNT(*) as cnt FROM {table}"
+    if where_clause:
+        sql += f" WHERE {where_clause}"
+    result = q(sql, args, one=True)
+    return result["cnt"] if result else 0
+
+
+def get_table_schema(table: str) -> list[dict]:
+    """Get schema information for a table.
+
+    Returns:
+        List of column info dicts: {"cid": int, "name": str, "type": str, "notnull": bool, "dflt_value": any, "pk": bool}
+    """
+    return q(f"PRAGMA table_info({table})")
+
+
+def export_to_json(records: list[dict], indent: bool = True) -> str:
+    """Convert records to JSON string.
+
+    Args:
+        records: List of dict records
+        indent: Whether to pretty-print
+
+    Returns:
+        JSON string
+    """
+    return json.dumps(records, indent=2 if indent else None, ensure_ascii=False, default=str)
+
+
+def import_from_json(json_str: str) -> list[dict]:
+    """Parse JSON string into records.
+
+    Args:
+        json_str: JSON string
+
+    Returns:
+        List of dict records
+    """
+    try:
+        data = json.loads(json_str)
+        if not isinstance(data, list):
+            raise ValueError(f"Expected list, got {type(data).__name__}")
+        return data
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON: {str(e)}")
