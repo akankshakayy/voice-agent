@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="192dp"
+    android:height="192dp"
+    android:viewportWidth="192"
+    android:viewportHeight="192">
+
+  <!-- Background circle with Eko green -->
+  <path
+      android:fillColor="#1B5E20"
+      android:pathData="M96,0 C149.03,0 192,42.97 192,96 C192,149.03 149.03,192 96,192 C42.97,192 0,149.03 0,96 C0,42.97 42.97,0 96,0 Z" />
+
+  <!-- Orange accent circle -->
+  <circle
+      android:cx="96"
+      android:cy="96"
+      android:r="85"
+      android:fillColor="#FFA500" />
+
+  <!-- Eko "e" -->
+  <g android:translateX="30" android:translateY="60">
+    <circle
+        android:cx="20"
+        android:cy="20"
+        android:r="15"
+        android:fillColor="none"
+        android:strokeColor="white"
+        android:strokeWidth="3" />
+    <line
+        android:x1="5"
+        android:y1="20"
+        android:x2="35"
+        android:y2="20"
+        android:strokeColor="white"
+        android:strokeWidth="3" />
+    <line
+        android:x1="5"
+        android:y1="10"
+        android:x2="32"
+        android:y2="10"
+        android:strokeColor="white"
+        android:strokeWidth="3" />
+    <line
+        android:x1="5"
+        android:y1="30"
+        android:x2="32"
+        android:y2="30"
+        android:strokeColor="white"
+        android:strokeWidth="3" />
+  </g>
+
+  <!-- Eko "k" -->
+  <g android:translateX="60" android:translateY="60">
+    <line
+        android:x1="8"
+        android:y1="0"
+        android:x2="8"
+        android:y2="40"
+        android:strokeColor="white"
+        android:strokeWidth="3" />
+    <line
+        android:x1="8"
+        android:y1="15"
+        android:x2="30"
+        android:y2="30"
+        android:strokeColor="white"
+        android:strokeWidth="3" />
+    <line
+        android:x1="8"
+        android:y1="25"
+        android:x2="30"
+        android:y2="10"
+        android:strokeColor="white"
+        android:strokeWidth="3" />
+  </g>
+
+  <!-- Eko "o" (smiley face) -->
+  <g android:translateX="100" android:translateY="55">
+    <circle
+        android:cx="25"
+        android:cy="20"
+        android:r="20"
+        android:fillColor="none"
+        android:strokeColor="white"
+        android:strokeWidth="3" />
+    <circle
+        android:cx="15"
+        android:cy="12"
+        android:r="2"
+        android:fillColor="white" />
+    <circle
+        android:cx="35"
+        android:cy="12"
+        android:r="2"
+        android:fillColor="white" />
+    <path
+        android:pathData="M15,28 Q25,35 35,28"
+        android:strokeColor="white"
+        android:strokeWidth="2"
+        android:fillColor="none"
+        android:strokeLineCap="round" />
+  </g>
+
+  <!-- Recording waves (uploader symbol) -->
+  <g android:translateX="80" android:translateY="130">
+    <path
+        android:pathData="M0,8 L0,4 C0,2 2,0 4,0 L12,0 C14,0 16,2 16,4 L16,8"
+        android:strokeColor="white"
+        android:strokeWidth="2"
+        android:fillColor="white"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M2,14 L14,14"
+        android:strokeColor="white"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M6,10 L10,10 L10,18"
+        android:strokeColor="white"
+        android:strokeWidth="1.5"
+        android:fillColor="none"
+        android:strokeLineCap="round" />
+  </g>
+
+</vector>
