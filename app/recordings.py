@@ -185,18 +185,18 @@ def send_to_prachi_api(rec: dict) -> bool:
         log.warning(f"PRACHI_API_URL or PRACHI_API_KEY not set; skipping Prachi sync for recording {rec['id']}")
         return True
 
-    if not rec.get("transcript_json"):
-        log.debug(f"Recording {rec['id']} has no transcript; not sending to Prachi")
-        return True
+    # Always send to Prachi (transcript not needed - Prachi gets audio only)
+    # No need to check for transcript_json
 
     mode = rec.get("mode", "rm")
+    # Prachi gets the recording + metadata only, NOT the transcript (transcriptions are for internal use)
     payload = {
         "recording_id": rec["id"],
         "mode": mode,
         "timestamp": rec.get("uploaded_at"),
-        "transcript": json.loads(rec["transcript_json"]) if isinstance(rec["transcript_json"], str) else rec["transcript_json"],
         "other_number": rec.get("other_number"),
-        "duration_sec": rec.get("duration_sec")
+        "duration_sec": rec.get("duration_sec"),
+        "recording_url": f"https://indev.eko.in/api/recordings/download/{rec['id']}"  # Prachi can fetch audio if needed
     }
 
     # Add mode-specific IDs
