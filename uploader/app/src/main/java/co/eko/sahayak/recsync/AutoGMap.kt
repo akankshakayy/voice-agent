@@ -40,18 +40,22 @@ class AutoGMap(private val context: Context, private val apiKey: String, private
 
     /**
      * Fetch numbers from AutoGMap API.
-     * Expected JSON format (assuming standard structure):
+     * Current format from backend (as of Nov 11, 2026):
      * {
+     *   "as_of": "2026-11-11T10:30:00Z",
+     *   "count": N,
      *   "numbers": [
-     *     {"number": "9876543210", "test": true, "name": "...", "rm_id": 123},
-     *     {"number": "9876543211", "test": false, "name": "...", "rm_id": 456}
+     *     {"phone": "9876543210", "local": "...", "name": "...", "since": "2026-11-01"}
      *   ]
      * }
+     *
+     * Future format (when Mansi adds test support):
+     *   Add "test": true to distinguish team test numbers
      */
     fun syncNumbers(): SyncResult = try {
         val req = Request.Builder()
             .url(apiUrl)
-            .header("Authorization", "Bearer $apiKey")
+            .header("X-API-Key", apiKey)  // AutoGMap uses X-API-Key header
             .header("User-Agent", "Sahayak-Uploader/1.0")
             .get()
             .build()
@@ -77,19 +81,22 @@ class AutoGMap(private val context: Context, private val apiKey: String, private
 
             for (i in 0 until numbersArray.length()) {
                 val numberObj = numbersArray.getJSONObject(i)
-                val number = numberObj.getString("number")
+                // Current backend field: "phone" (not "number")
+                val phone = numberObj.getString("phone")
+                // Future field: "test" (will be added by Mansi)
                 val isTest = numberObj.optBoolean("test", false)
                 val name = numberObj.optString("name", null)
-                val rmId = numberObj.optInt("rm_id", -1).takeIf { it != -1 }
+                val localInfo = numberObj.optString("local", null)
+                val since = numberObj.optString("since", null)
 
                 val phoneNum = PhoneNumber(
-                    number = number,
+                    number = phone,
                     isTest = isTest,
                     name = name,
-                    rmId = rmId
+                    rmId = null  // AutoGMap API doesn't include rm_id yet
                 )
 
-                cache[number] = phoneNum
+                cache[phone] = phoneNum
 
                 if (isTest) testCount++ else prodCount++
             }

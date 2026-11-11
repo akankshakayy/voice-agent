@@ -33,34 +33,34 @@ The AutoGMap integration adds:
 - Validate recordings before upload
 - Handle test numbers appropriately
 
-## Expected API Format
+## API Format
 
-Assuming Mansi confirms this structure:
+**Current format** (from backend app/autogmap.py):
 
 ```json
 {
+  "as_of": "2026-11-11T10:30:00Z",
+  "count": 2,
   "numbers": [
     {
-      "number": "9876543210",
-      "test": true,
-      "name": "Test RM 1",
-      "rm_id": 101
-    },
-    {
-      "number": "9876543211",
-      "test": false,
-      "name": "Prod RM",
-      "rm_id": 102
+      "phone": "9876543210",
+      "local": "...",
+      "name": "Team Member Name",
+      "since": "2026-11-01"
     }
   ]
 }
 ```
 
-**Fields:**
-- `number` (string, required): 10-digit phone number
-- `test` (boolean, optional): true if this is a test number
-- `name` (string, optional): RM or team member name
-- `rm_id` (integer, optional): Reference to RM in system
+**Fields (current):**
+- `phone` (string, required): 10-digit phone number
+- `local` (string, optional): Local indicator
+- `name` (string, optional): Team member name
+- `since` (string, optional): Date since when
+
+**Future update** (when Mansi adds test support):
+- Will add `"test": true` field to distinguish team test numbers
+- Code already supports this — will work automatically when added
 
 ## Integration Steps
 
@@ -78,6 +78,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         
         // Initialize AutoGMap with API credentials
+        // Uses X-API-Key header (AutoGMap convention)
         autoGMap = AutoGMap(
             context = this,
             apiKey = s.autoGMapApiKey,  // From Settings or env
@@ -265,13 +266,13 @@ AUTOGMAP_SYNC_INTERVAL_MINUTES=15
 
 ## Next Steps
 
-1. **Confirm API format** with Mansi — verify exact JSON structure
-2. **Update AutoGMap.kt** if format differs from assumptions
-3. **Integrate into UploadWorker** — add number validation
-4. **Test with team numbers** — upload recordings from test numbers
-5. **Monitor logs** — verify sync and upload metrics
-6. **Production rollout** — deploy when Mansi confirms format
+1. **Add to Settings.kt** — store AUTOGMAP_API_KEY from env
+2. **Integrate into UploadWorker.doWork()** — call `uploader.validateRecording()` before upload
+3. **Schedule AutoGMapSyncWorker** — sync numbers every 15 minutes
+4. **Test with actual numbers** — use team numbers when available (will have `"test": true` once Mansi adds it)
+5. **Monitor logs** — verify sync and validation metrics
+6. **Production rollout** — deploy when Mansi confirms test field format
 
 ---
 
-**Note:** This implementation assumes test numbers are marked with `"test": true`. Adjust the parsing logic if Mansi's actual format is different.
+**Status:** API format confirmed from backend (app/autogmap.py). Test field not yet in backend but code is ready to support it automatically when Mansi adds `"test": true` to the response.
