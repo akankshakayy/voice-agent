@@ -169,7 +169,12 @@ def validate_dc_consent(dc_id: int, consent_token: str) -> bool:
 
 
 def send_to_prachi_api(rec: dict) -> bool:
-    """Send DC recording (with transcript) to Prachi's API. Returns True if success/fatal, False if retry."""
+    """Send DC or RM recording (with transcript) to Prachi's API. Returns True if success/fatal, False if retry.
+
+    Supports both modes:
+    - DC mode: sends with dc_id
+    - RM mode: sends with rm_id (Phase 7 requirement from Prachi)
+    """
     import os
     import requests
 
@@ -184,14 +189,21 @@ def send_to_prachi_api(rec: dict) -> bool:
         log.debug(f"Recording {rec['id']} has no transcript; not sending to Prachi")
         return True
 
+    mode = rec.get("mode", "rm")
     payload = {
         "recording_id": rec["id"],
-        "dc_id": rec.get("dc_id"),
+        "mode": mode,
         "timestamp": rec.get("uploaded_at"),
         "transcript": json.loads(rec["transcript_json"]) if isinstance(rec["transcript_json"], str) else rec["transcript_json"],
         "other_number": rec.get("other_number"),
         "duration_sec": rec.get("duration_sec")
     }
+
+    # Add mode-specific IDs
+    if mode == "dc":
+        payload["dc_id"] = rec.get("dc_id")
+    elif mode == "rm":
+        payload["rm_id"] = rec.get("rm_id")
 
     try:
         response = requests.post(
@@ -1039,14 +1051,15 @@ def process_one(r: dict):
     _write_summary(r["id"])
     integrations.recording_processed(r["id"])
 
-    # DC mode: send to Prachi's API after transcription
-    if mode == "dc":
+    # Send to Prachi's API after transcription (both DC and RM modes)
+    # Phase 7: Prachi now needs RM's recordings in addition to DC's
+    if mode in ("dc", "rm"):
         # Fetch updated recording with transcript
         rec_updated = db.q("SELECT * FROM recordings WHERE id=?", (r["id"],), one=True)
         if not send_to_prachi_api(rec_updated):
-            log.warning(f"Failed to send DC recording {r['id']} to Prachi API; will retry on next run")
+            log.warning(f"Failed to send {mode.upper()} recording {r['id']} to Prachi API; will retry on next run")
 
-    # RM mode: queue AutoGMap upload if phone is in applicants
+    # RM mode: also queue AutoGMap upload if phone is in applicants
     if mode == "rm" and r.get("other_number") and r.get("duration_sec"):
         # Normalize phone number (last 10 digits)
         phone = re.sub(r"\D", "", r["other_number"])[-10:] if r["other_number"] else ""
