@@ -55,10 +55,34 @@ class UploadWorker(context: Context, params: WorkerParameters) : Worker(context,
         val calls = Device.calls(applicationContext, since - Settings.DAY_MS)
         val api = Api(s.serverUrl, s.token)
 
+        // Initialize AutoGMap for RM number validation (optional, gracefully degrades if disabled)
+        val autoGMapApiKey = System.getenv("AUTOGMAP_API_KEY") ?: ""
+        val autoGMapUrl = System.getenv("AUTOGMAP_NUMBERS_URL") ?: ""
+        val autoGMap = if (autoGMapApiKey.isNotEmpty() && autoGMapUrl.isNotEmpty()) {
+            try {
+                AutoGMap(autoGMapApiKey, autoGMapUrl).apply {
+                    val syncResult = syncNumbers()
+                    if (syncResult.success) {
+                        Log.i(TAG, "AutoGMap sync: ${syncResult.totalFetched} numbers (${syncResult.testNumbers} test)")
+                    } else {
+                        Log.w(TAG, "AutoGMap sync failed: ${syncResult.error}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "AutoGMap init failed: ${e.message}")
+                null
+            }
+        } else {
+            Log.d(TAG, "AutoGMap disabled (no API key configured)")
+            null
+        }
+        val uploader = RecordingUploader(api, autoGMap)
+
         // The watermark only moves past an unbroken run of handled files, so a failure is retried next time
         var watermark = s.watermarkMs
         var blocked = false
         var retry = false
+        var testUploaded = 0
         for (f in files) {
             if (s.isHandled(f)) { if (!blocked) watermark = maxOf(watermark, f.mtimeMs); continue }
             val age = now - f.mtimeMs
@@ -71,20 +95,40 @@ class UploadWorker(context: Context, params: WorkerParameters) : Worker(context,
                 call == null -> "skip: no matching call"
                 !Matcher.isEkoSim(call.accountId, s.ekoAccountIds) -> "skip: not the Eko SIM"
                 s.mode == "dc" && !s.allowedNumbers.contains(call.number) -> "skip: number not in DC allowed list"
-                else -> when (val r = api.upload(
-                    applicationContext.contentResolver, f, call, s.deviceId, s.rmId,
-                    mode = s.mode,
-                    dcId = s.dcId,
-                    employeeId = s.employeeId,
-                    consentToken = s.consentToken
-                )) {
-                    is Api.Upload.Ok -> if (r.duplicate) "duplicate" else "uploaded"
-                    is Api.Upload.Rejected -> "rejected ${r.code}: ${r.detail}"
-                    is Api.Upload.Unauthorized -> {
-                        error = "Token rejected: ${r.detail}. Ask the Sahayak admin for a new token."
-                        return finish(Result.failure())
+                // AutoGMap validation for RM mode (if enabled)
+                s.mode == "rm" && autoGMap != null && !autoGMap.isValidNumber(call.number) ->
+                    "skip: RM number ${call.number} not in AutoGMap"
+                else -> {
+                    // Build upload request
+                    val uploadRequest = RecordingUploader.UploadRequest(
+                        file = f,
+                        call = call,
+                        deviceId = s.deviceId,
+                        rmId = s.rmId,
+                        mode = s.mode,
+                        dcId = s.dcId,
+                        employeeId = s.employeeId,
+                        consentToken = s.consentToken
+                    )
+
+                    // Upload with validation
+                    val (uploadResult, validation) = uploader.upload(applicationContext.contentResolver, uploadRequest)
+
+                    // Track test numbers
+                    if (validation is RecordingUploader.ValidationResult.Valid && validation.isTest) {
+                        testUploaded++
+                        Log.d(TAG, "Test number uploaded: ${call.number} (${validation.number?.name})")
                     }
-                    is Api.Upload.Retry -> { error = r.detail; retry = true; break }
+
+                    when (uploadResult) {
+                        is Api.Upload.Ok -> if (uploadResult.duplicate) "duplicate" else "uploaded"
+                        is Api.Upload.Rejected -> "rejected ${uploadResult.code}: ${uploadResult.detail}"
+                        is Api.Upload.Unauthorized -> {
+                            error = "Token rejected: ${uploadResult.detail}. Ask the Sahayak admin for a new token."
+                            return finish(Result.failure())
+                        }
+                        is Api.Upload.Retry -> { error = uploadResult.detail; retry = true; break }
+                    }
                 }
             }
             Log.i(TAG, "${f.name}: $outcome")
@@ -100,6 +144,17 @@ class UploadWorker(context: Context, params: WorkerParameters) : Worker(context,
         if (retry) failed++
         s.watermarkMs = watermark
         s.pruneHandled()
+
+        // Log AutoGMap statistics
+        if (autoGMap != null) {
+            val status = uploader.getSyncStatus()
+            Log.i(TAG, "AutoGMap status: ${status?.get("totalCached")} numbers cached, " +
+                "${status?.get("testCount")} test, ${status?.get("productionCount")} production")
+        }
+        if (testUploaded > 0) {
+            Log.i(TAG, "Test uploads this run: $testUploaded")
+        }
+
         // blocked = a recording still being written, or its call not in the call log yet: look again shortly
         return finish(if (retry || blocked) Result.retry() else Result.success())
     }
