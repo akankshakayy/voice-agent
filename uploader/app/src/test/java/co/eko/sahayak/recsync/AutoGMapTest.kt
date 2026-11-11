@@ -10,8 +10,11 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 
+@RunWith(RobolectricTestRunner::class)
 class AutoGMapTest {
     private lateinit var server: MockWebServer
     private lateinit var autoGMap: AutoGMap
