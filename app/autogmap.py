@@ -41,6 +41,7 @@ AUTOGMAP_UPLOAD_RETRY_MAX = int(os.environ.get("AUTOGMAP_UPLOAD_RETRY_MAX", "3")
 AUTOGMAP_UPLOAD_RETRY_BACKOFF = [
     int(x.strip()) for x in os.environ.get("AUTOGMAP_UPLOAD_RETRY_BACKOFF", "60,300,900").split(",")
 ]
+AUTOGMAP_UPLOAD_TIMEOUT_SEC = int(os.environ.get("AUTOGMAP_UPLOAD_TIMEOUT_SECONDS", "60"))
 
 # Global sync state
 _sync_lock = threading.RLock()
@@ -194,34 +195,55 @@ class AutoGMapClient:
             )
 
     async def upload_recording(
-        self, file_path: str, phone: str, direction: str, duration: int
-    ) -> bool:
+        self,
+        file_path: str,
+        phone: str,
+        direction: str = "in",
+        duration_sec: int = 0,
+        device: str = None,
+    ) -> tuple[bool, str, dict]:
         """Upload a recording to AutoGMap.
 
         Args:
             file_path: Path to the audio file
             phone: Applicant's phone number
-            direction: 'inbound' or 'outbound'
-            duration: Call duration in seconds
+            direction: 'inbound' or 'outbound' (default: 'in')
+            duration_sec: Call duration in seconds (default: 0)
+            device: Device identifier (optional)
 
         Returns:
-            bool: True if upload succeeded, False otherwise
+            tuple: (success: bool, status: str, data: dict)
+              - success: True if upload succeeded, False otherwise
+              - status: Status string ('uploaded', 'not_in_applicants', 'server_error', 'timeout', 'file_not_found')
+              - data: Response data or error details, including 'recording_id' on success
 
-        Raises:
-            AutoGMapAPIError: If upload fails (with retriable flag)
+        Example:
+            success, status, data = await client.upload_recording(
+                '/path/to/file.ogg', '9876543210', 'inbound', 120
+            )
+            if success:
+                print(f"Uploaded with ID: {data.get('recording_id')}")
+            elif status == 'not_in_applicants':
+                print("Number not in AutoGMap applicants list")
         """
         import httpx
 
         if not os.path.exists(file_path):
             log.error("Recording file not found: %s", file_path)
-            raise AutoGMapAPIError("Recording file not found", retriable=False)
+            return False, "file_not_found", {"error": "File not found"}
 
         file_size = os.path.getsize(file_path)
         if file_size == 0:
             log.error("Recording file is empty: %s", file_path)
-            raise AutoGMapAPIError("Recording file is empty", retriable=False)
+            return False, "file_error", {"error": "File is empty"}
 
-        log.debug("Uploading recording to AutoGMap: phone=%s, file=%s", phone, file_path)
+        log.debug(
+            "Uploading recording to AutoGMap: phone=%s, direction=%s, duration=%d, size=%d bytes",
+            phone,
+            direction,
+            duration_sec,
+            file_size,
+        )
 
         headers = {
             "X-API-Key": self.api_key,
@@ -235,16 +257,18 @@ class AutoGMapClient:
                     data = {
                         "phone": phone,
                         "direction": direction,
-                        "duration": str(duration),
+                        "duration": str(duration_sec),
                         "uploaded_at": datetime.now(tz=ZoneInfo("UTC")).isoformat(),
                     }
+                    if device:
+                        data["device"] = device
 
                     response = await client.post(
                         self.recordings_url,
                         headers=headers,
                         data=data,
                         files=files,
-                        timeout=60,  # Upload timeout
+                        timeout=60,
                     )
 
             if response.status_code == 201:
@@ -254,20 +278,24 @@ class AutoGMapClient:
                     file_path,
                     file_size,
                 )
-                return True
+                try:
+                    resp_data = response.json()
+                    return True, "uploaded", {
+                        "recording_id": resp_data.get("recording_id"),
+                        "status": resp_data.get("status", "accepted"),
+                    }
+                except Exception:
+                    return True, "uploaded", {"status": "accepted"}
 
             if response.status_code == 422:
-                # Not in applicants: log warning but don't retry
                 log.warning(
                     "Recording not in AutoGMap applicants: phone=%s, file=%s",
                     phone,
                     file_path,
                 )
-                raise AutoGMapAPIError(
-                    f"Phone number {phone} not in applicants",
-                    status_code=422,
-                    retriable=False,
-                )
+                return False, "not_in_applicants", {
+                    "error": f"Phone number {phone} not in applicants"
+                }
 
             if response.status_code >= 500:
                 log.error(
@@ -275,11 +303,10 @@ class AutoGMapClient:
                     response.status_code,
                     response.text[:200],
                 )
-                raise AutoGMapAPIError(
-                    f"Server error: HTTP {response.status_code}",
-                    status_code=response.status_code,
-                    retriable=True,
-                )
+                return False, "server_error", {
+                    "error": f"Server error: HTTP {response.status_code}",
+                    "status_code": response.status_code,
+                }
 
             if response.status_code >= 400:
                 log.error(
@@ -287,27 +314,104 @@ class AutoGMapClient:
                     response.status_code,
                     response.text[:200],
                 )
-                raise AutoGMapAPIError(
-                    f"Upload error: HTTP {response.status_code}",
-                    status_code=response.status_code,
-                    retriable=False,
-                )
+                return False, "upload_error", {
+                    "error": f"Upload error: HTTP {response.status_code}",
+                    "status_code": response.status_code,
+                }
 
             log.error("Unexpected response code from AutoGMap: %d", response.status_code)
-            raise AutoGMapAPIError(
-                f"Unexpected response: HTTP {response.status_code}",
-                retriable=False,
-            )
+            return False, "unexpected_error", {
+                "error": f"Unexpected response: HTTP {response.status_code}",
+                "status_code": response.status_code,
+            }
 
         except httpx.TimeoutException as e:
-            log.error("AutoGMap upload timeout: %s", e)
-            raise AutoGMapAPIError("Upload timeout", retriable=True)
+            log.error("AutoGMap upload timeout after %ds: %s", self.timeout, e)
+            return False, "timeout", {"error": f"Request timeout after {self.timeout}s"}
         except httpx.RequestError as e:
             log.error("AutoGMap upload network error: %s", e)
-            raise AutoGMapAPIError(f"Network error: {e}", retriable=True)
+            return False, "network_error", {"error": f"Network error: {e}"}
         except Exception as e:
-            log.error("AutoGMap upload unexpected error: %s", e)
-            raise AutoGMapAPIError(f"Unexpected error: {e}", retriable=False)
+            log.error("AutoGMap upload unexpected error: %s", e, exc_info=True)
+            return False, "unexpected_error", {"error": f"Unexpected error: {e}"}
+
+
+class UploadRetryManager:
+    """Manages recording upload retries with exponential backoff."""
+
+    def __init__(
+        self,
+        client: AutoGMapClient,
+        max_retries: int = AUTOGMAP_UPLOAD_RETRY_MAX,
+        backoff_delays: list[int] = None,
+    ):
+        """Initialize retry manager.
+
+        Args:
+            client: AutoGMapClient instance
+            max_retries: Maximum number of retries (default from env)
+            backoff_delays: Backoff delays in seconds for each retry
+        """
+        self.client = client
+        self.max_retries = max_retries
+        self.backoff_delays = backoff_delays or AUTOGMAP_UPLOAD_RETRY_BACKOFF
+        log.info("UploadRetryManager initialized: max_retries=%d, backoff=%s", max_retries, self.backoff_delays)
+
+    async def upload_with_retry(
+        self,
+        file_path: str,
+        phone: str,
+        direction: str = "in",
+        duration_sec: int = 0,
+        device: str = None,
+    ) -> tuple[bool, str, dict]:
+        """Upload recording with automatic retry on retriable errors.
+
+        Args:
+            file_path: Path to audio file
+            phone: Phone number
+            direction: Call direction ('in' or 'out')
+            duration_sec: Duration in seconds
+            device: Device identifier
+
+        Returns:
+            tuple: (success, status, data) after all retries exhausted
+        """
+        for attempt in range(self.max_retries + 1):
+            success, status, data = await self.client.upload_recording(
+                file_path, phone, direction, duration_sec, device
+            )
+
+            if success:
+                log.info("Upload succeeded on attempt %d", attempt + 1)
+                return success, status, data
+
+            # Non-retriable errors: don't retry
+            if status in ("not_in_applicants", "file_not_found", "file_error"):
+                log.warning("Upload failed with non-retriable error: %s", status)
+                return success, status, data
+
+            # Retriable errors: retry if attempts left
+            if attempt < self.max_retries:
+                delay = self.backoff_delays[min(attempt, len(self.backoff_delays) - 1)]
+                log.warning(
+                    "Upload failed (attempt %d/%d): %s, retrying in %ds",
+                    attempt + 1,
+                    self.max_retries + 1,
+                    status,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            # All retries exhausted
+            log.error(
+                "Upload failed after %d attempts: %s. Last error: %s",
+                self.max_retries + 1,
+                status,
+                data.get("error"),
+            )
+            return success, status, data
 
 
 class AutoGMapSync:

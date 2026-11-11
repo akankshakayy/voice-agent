@@ -221,6 +221,100 @@ def send_to_prachi_api(rec: dict) -> bool:
         return False
 
 
+def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: str, duration_sec: int) -> None:
+    """Queue a recording for AutoGMap upload. Non-blocking; upload happens in background.
+
+    Args:
+        rec_id: Recording ID
+        file_path: Path to audio file
+        phone: Phone number
+        direction: 'incoming' or 'outgoing'
+        duration_sec: Call duration in seconds
+    """
+    try:
+        from . import autogmap
+
+        # Check if phone is in AutoGMap applicants
+        if not autogmap.has_number(phone):
+            log.debug(f"Recording {rec_id}: Phone {phone} not in AutoGMap applicants; skipping upload")
+            db.update("recordings", rec_id, autogmap_status="not_in_applicants")
+            return
+
+        # Queue for background upload
+        db.update("recordings", rec_id, autogmap_status="pending")
+        log.info(f"Recording {rec_id} queued for AutoGMap upload (phone={phone})")
+
+        # Spawn background upload task
+        threading.Thread(
+            target=_upload_to_autogmap_background,
+            args=(rec_id, file_path, phone, direction, duration_sec),
+            daemon=True,
+            name=f"autogmap-upload-{rec_id}"
+        ).start()
+
+    except Exception as e:
+        log.error(f"Error queuing AutoGMap upload for recording {rec_id}: {e}")
+        db.update("recordings", rec_id, autogmap_status="failed", autogmap_error=str(e)[:500])
+
+
+def _upload_to_autogmap_background(rec_id: int, file_path: str, phone: str, direction: str, duration_sec: int) -> None:
+    """Background worker: upload recording to AutoGMap with retries.
+
+    Args:
+        rec_id: Recording ID
+        file_path: Path to audio file (relative to storage_dir)
+        phone: Phone number
+        direction: 'incoming' or 'outgoing'
+        duration_sec: Call duration in seconds
+    """
+    try:
+        from . import autogmap
+        import asyncio
+
+        # Get full path
+        full_path = os.path.join(storage_dir(), file_path)
+
+        log.info(f"Starting AutoGMap upload for recording {rec_id}: {phone}")
+
+        # Create client and retry manager
+        try:
+            client = autogmap.AutoGMapClient()
+        except autogmap.AutoGMapConfigError as e:
+            log.error(f"AutoGMap not configured: {e}")
+            db.update("recordings", rec_id, autogmap_status="failed", autogmap_error="AutoGMap not configured")
+            return
+
+        retry_manager = autogmap.UploadRetryManager(client)
+
+        # Run async upload with retries
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            success, status, data = loop.run_until_complete(
+                retry_manager.upload_with_retry(full_path, phone, direction, duration_sec)
+            )
+        finally:
+            loop.close()
+
+        # Update recording status
+        if success:
+            db.update("recordings", rec_id,
+                     autogmap_status="uploaded",
+                     autogmap_sent_at=time.time(),
+                     autogmap_attempts=data.get("attempts", 1))
+            log.info(f"Recording {rec_id} successfully uploaded to AutoGMap")
+        else:
+            db.update("recordings", rec_id,
+                     autogmap_status="failed",
+                     autogmap_error=data.get("error", f"Upload failed: {status}"),
+                     autogmap_attempts=data.get("attempts", 1))
+            log.warning(f"Recording {rec_id} failed to upload to AutoGMap: {status}")
+
+    except Exception as e:
+        log.exception(f"AutoGMap upload background worker failed for recording {rec_id}")
+        db.update("recordings", rec_id, autogmap_status="failed", autogmap_error=str(e)[:500])
+
+
 def send_to_mansi_api(rec: dict) -> bool:
     """Send Employee recording (no transcript) to Mansi's API. Returns True if success/fatal, False if retry."""
     import os
@@ -951,6 +1045,19 @@ def process_one(r: dict):
         rec_updated = db.q("SELECT * FROM recordings WHERE id=?", (r["id"],), one=True)
         if not send_to_prachi_api(rec_updated):
             log.warning(f"Failed to send DC recording {r['id']} to Prachi API; will retry on next run")
+
+    # RM mode: queue AutoGMap upload if phone is in applicants
+    if mode == "rm" and r.get("other_number") and r.get("duration_sec"):
+        # Normalize phone number (last 10 digits)
+        phone = re.sub(r"\D", "", r["other_number"])[-10:] if r["other_number"] else ""
+        if phone:
+            queue_autogmap_upload(
+                r["id"],
+                r["file_path"],
+                phone,
+                "inbound" if r.get("direction") == "incoming" else "outbound",
+                int(r.get("duration_sec", 0))
+            )
 
 
 def _write_summary(rec_id: int):
