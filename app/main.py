@@ -1320,6 +1320,120 @@ def update_employee(employee_id: int, body: EmployeeBody):
     return db.q("SELECT * FROM employees WHERE id=?", (employee_id,), one=True)
 
 
+@app.get("/api/mansi/recordings")
+def mansi_recordings(
+    employee_id: int | None = None,
+    other_number: str | None = None,
+    days: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    skip: int = 0,
+    limit: int = 100
+):
+    """Pull-based API for Mansi to query employee recordings.
+
+    Default: Last 7 days of employee recordings.
+    Flexible: Customize with date_from/date_to or days parameter.
+
+    Query parameters:
+    - employee_id: Filter by specific employee
+    - other_number: Filter by caller phone number
+    - days: Last N days (default 7, overridden by date_from/date_to)
+    - date_from: Start date (ISO: 2026-11-01)
+    - date_to: End date (ISO: 2026-11-30)
+    - status: Filter by status ('new', 'done', 'failed')
+    - skip: Pagination offset
+    - limit: Max records per request (default 100, max 500)
+    """
+    # Validate API key from header if needed (optional for now, can add authentication layer)
+    # auth_header = request.headers.get('Authorization', '') if request else ''
+
+    # Set defaults
+    if days is None and date_from is None and date_to is None:
+        days = 7  # Default: last 7 days
+
+    # Calculate date range
+    import datetime
+    now = datetime.datetime.utcnow()
+
+    if date_from and date_to:
+        # Use explicit date range (overrides days parameter)
+        try:
+            start_dt = datetime.datetime.fromisoformat(date_from)
+            end_dt = datetime.datetime.fromisoformat(date_to)
+            # Set end to end of day
+            end_dt = end_dt.replace(hour=23, minute=59, second=59)
+        except ValueError:
+            raise HTTPException(400, "Invalid date format. Use ISO format: 2026-11-01")
+        days_param = None
+    elif days:
+        # Use days parameter
+        start_dt = now - datetime.timedelta(days=days)
+        end_dt = now
+        days_param = days
+    else:
+        # Fallback to 7 days
+        start_dt = now - datetime.timedelta(days=7)
+        end_dt = now
+        days_param = 7
+
+    start_ts = start_dt.timestamp()
+    end_ts = end_dt.timestamp()
+
+    # Build query
+    query = "SELECT * FROM recordings WHERE mode='employee' AND uploaded_at >= ? AND uploaded_at <= ?"
+    params = [start_ts, end_ts]
+
+    # Add filters
+    if employee_id is not None:
+        query += " AND employee_id = ?"
+        params.append(employee_id)
+
+    if other_number is not None:
+        query += " AND other_number = ?"
+        params.append(other_number)
+
+    if status is not None:
+        query += " AND status = ?"
+        params.append(status)
+
+    # Count total before pagination
+    count_query = query.replace("SELECT *", "SELECT COUNT(*) as cnt")
+    total = db.q(count_query, params, one=True)["cnt"]
+
+    # Add pagination and sorting
+    query += " ORDER BY uploaded_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, skip])
+
+    # Fetch results
+    recs = db.q(query, params)
+
+    # Format response
+    filters_applied = {
+        "employee_id": employee_id,
+        "other_number": other_number,
+        "status": status,
+    }
+
+    # Remove None values from filters_applied
+    filters_applied = {k: v for k, v in filters_applied.items() if v is not None}
+
+    # Add date info
+    if date_from and date_to:
+        filters_applied["date_from"] = date_from
+        filters_applied["date_to"] = date_to
+    else:
+        filters_applied["days"] = days_param or 7
+
+    return {
+        "recordings": recs,
+        "total": total,
+        "default_timeframe": "last 7 days" if (date_from is None and date_to is None and days is None) else "custom",
+        "filters_applied": filters_applied
+    }
+
+
 @app.get("/api/recordings", dependencies=[Depends(allow("admin", "ops", "rm"))])
 def list_recordings(request: Request, status: str | None = None, rm_id: int | None = None, limit: int = 500, call_type: str | None = None):
     u = request.state.user

@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phase 5 Admin UI - DCs, Employees, Allowed Numbers</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --primary: #3B82F6;
+      --primary-dark: #2563EB;
+      --bg-light: #F9FAFB;
+      --bg-white: #FFFFFF;
+      --border: #E5E7EB;
+      --text-dark: #1F2937;
+      --text-muted: #6B7280;
+      --success: #10B981;
+      --danger: #EF4444;
+      --radius: 8px;
+      --shadow: 0 1px 3px 0 rgba(0,0,0,0.1);
+      --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1);
+    }
+
+    body {
+      font-family: "Inter", system-ui, sans-serif;
+      background: var(--bg-light);
+      color: var(--text-dark);
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    header {
+      background: var(--bg-white);
+      padding: 24px;
+      border-radius: var(--radius);
+      margin-bottom: 32px;
+      box-shadow: var(--shadow);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    header h1 {
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .nav-tabs {
+      display: flex;
+      gap: 8px;
+      background: var(--bg-white);
+      padding: 0;
+      border-radius: var(--radius);
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+
+    .nav-tab {
+      padding: 12px 20px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .nav-tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+
+    .nav-tab:hover {
+      color: var(--text-dark);
+    }
+
+    /* Page */
+    .page {
+      display: none;
+      background: var(--bg-white);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }
+
+    .page.active {
+      display: block;
+    }
+
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .page-header h2 {
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    /* Button */
+    button {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: var(--primary-dark);
+    }
+
+    button.danger {
+      background: var(--danger);
+    }
+
+    button.danger:hover {
+      background: #DC2626;
+    }
+
+    button.secondary {
+      background: var(--bg-light);
+      color: var(--text-dark);
+      border: 1px solid var(--border);
+    }
+
+    button.secondary:hover {
+      background: var(--border);
+    }
+
+    /* Table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th {
+      text-align: left;
+      padding: 12px;
+      background: var(--bg-light);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+
+    td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    tr:hover {
+      background: var(--bg-light);
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .btn-icon {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+    }
+
+    /* Badge */
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .badge.active {
+      background: #DBEAFE;
+      color: #0369A1;
+    }
+
+    .badge.inactive {
+      background: #F3F4F6;
+      color: #6B7280;
+    }
+
+    /* Modal */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal.open {
+      display: flex;
+    }
+
+    .modal-content {
+      background: var(--bg-white);
+      border-radius: var(--radius);
+      padding: 24px;
+      max-width: 400px;
+      width: 90%;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .modal-header {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-close {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      background: none;
+      color: var(--text-muted);
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+      font-size: 14px;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    .modal-footer {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Filters */
+    .filters {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .filter-input {
+      width: 200px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 14px;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: var(--text-muted);
+    }
+
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+    }
+
+    /* Tabs styling */
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    .breadcrumb {
+      color: var(--text-muted);
+      font-size: 12px;
+      margin-bottom: 16px;
+    }
+
+    .breadcrumb strong {
+      color: var(--text-dark);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>👥 Admin Panel - Uploader Management</h1>
+      <div style="color: var(--text-muted); font-size: 14px;">Logged in as: Admin</div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <div class="nav-tabs">
+      <button class="nav-tab active" onclick="switchPage('dcs')">
+        🏢 Data Collectors (DCs)
+      </button>
+      <button class="nav-tab" onclick="switchPage('employees')">
+        👤 Employees
+      </button>
+      <button class="nav-tab" onclick="switchPage('allowed-numbers')">
+        📱 Allowed Phone Numbers
+      </button>
+    </div>
+
+    <!-- ===== PAGE 1: DCs ===== -->
+    <div id="dcs" class="page active">
+      <div class="page-header">
+        <h2>Data Collectors</h2>
+        <button onclick="openDCModal()">+ Add DC</button>
+      </div>
+
+      <div class="filters">
+        <input type="text" class="filter-input" placeholder="Search by name or phone...">
+        <select class="filter-input" style="width: auto;">
+          <option>All Regions</option>
+          <option>Mumbai</option>
+          <option>Delhi</option>
+          <option>Bangalore</option>
+        </select>
+        <select class="filter-input" style="width: auto;">
+          <option>All Status</option>
+          <option>Active</option>
+          <option>Inactive</option>
+        </select>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Phone</th>
+            <th>Email</th>
+            <th>Region</th>
+            <th>Created</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>#1</td>
+            <td><strong>DC Test 1</strong></td>
+            <td>9876543210</td>
+            <td>dc1@eko.co.in</td>
+            <td>Mumbai</td>
+            <td>Nov 11, 2026</td>
+            <td><span class="badge active">Active</span></td>
+            <td>
+              <div class="actions">
+                <button class="btn-sm" onclick="openDCModal(1)">Edit</button>
+                <button class="btn-sm danger">Delete</button>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td>#2</td>
+            <td><strong>DC Test 2</strong></td>
+            <td>9876543211</td>
+            <td>dc2@eko.co.in</td>
+            <td>Delhi</td>
+            <td>Nov 11, 2026</td>
+            <td><span class="badge active">Active</span></td>
+            <td>
+              <div class="actions">
+                <button class="btn-sm" onclick="openDCModal(2)">Edit</button>
+                <button class="btn-sm danger">Delete</button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top: 20px; padding: 12px; background: var(--bg-light); border-radius: 6px; font-size: 13px; color: var(--text-muted);">
+        📊 Total DCs: 2 | Active: 2 | Inactive: 0
+      </div>
+    </div>
+
+    <!-- ===== PAGE 2: EMPLOYEES ===== -->
+    <div id="employees" class="page">
+      <div class="page-header">
+        <h2>Employees</h2>
+        <button onclick="openEmployeeModal()">+ Add Employee</button>
+      </div>
+
+      <div class="filters">
+        <input type="text" class="filter-input" placeholder="Search by name or phone...">
+        <select class="filter-input" style="width: auto;">
+          <option>All Departments</option>
+          <option>Sales</option>
+          <option>Support</option>
+          <option>Engineering</option>
+        </select>
+        <select class="filter-input" style="width: auto;">
+          <option>All Status</option>
+          <option>Active</option>
+          <option>Inactive</option>
+        </select>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Phone</th>
+            <th>Email</th>
+            <th>Department</th>
+            <th>Created</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>#1</td>
+            <td><strong>Employee Test 1</strong></td>
+            <td>8765432109</td>
+            <td>emp1@eko.co.in</td>
+            <td>Sales</td>
+            <td>Nov 11, 2026</td>
+            <td><span class="badge active">Active</span></td>
+            <td>
+              <div class="actions">
+                <button class="btn-sm" onclick="openEmployeeModal(1)">Edit</button>
+                <button class="btn-sm danger">Delete</button>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td>#2</td>
+            <td><strong>Employee Test 2</strong></td>
+            <td>8765432108</td>
+            <td>emp2@eko.co.in</td>
+            <td>Support</td>
+            <td>Nov 11, 2026</td>
+            <td><span class="badge active">Active</span></td>
+            <td>
+              <div class="actions">
+                <button class="btn-sm" onclick="openEmployeeModal(2)">Edit</button>
+                <button class="btn-sm danger">Delete</button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top: 20px; padding: 12px; background: var(--bg-light); border-radius: 6px; font-size: 13px; color: var(--text-muted);">
+        📊 Total Employees: 2 | Active: 2 | Inactive: 0
+      </div>
+    </div>
+
+    <!-- ===== PAGE 3: ALLOWED NUMBERS ===== -->
+    <div id="allowed-numbers" class="page">
+      <div class="page-header">
+        <h2>Allowed Phone Numbers</h2>
+        <button onclick="openNumberModal()">+ Add Number</button>
+      </div>
+
+      <div class="filters">
+        <input type="text" class="filter-input" placeholder="Search by phone number...">
+        <select class="filter-input" style="width: auto;" onchange="filterByDC(this.value)">
+          <option value="">All DCs</option>
+          <option value="1">DC Test 1</option>
+          <option value="2">DC Test 2</option>
+        </select>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>DC ID</th>
+            <th>DC Name</th>
+            <th>Phone Number</th>
+            <th>Description</th>
+            <th>Added By</th>
+            <th>Added At</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>#1</td>
+            <td>#1</td>
+            <td>DC Test 1</td>
+            <td><strong>9876543210</strong></td>
+            <td>DC1 Main</td>
+            <td>test-setup</td>
+            <td>Nov 11, 2026</td>
+            <td>
+              <div class="actions">
+                <button class="btn-sm danger" onclick="removeNumber(1)">Remove</button>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td>#2</td>
+            <td>#1</td>
+            <td>DC Test 1</td>
+            <td><strong>9876543212</strong></td>
+            <td>DC1 Alt</td>
+            <td>test-setup</td>
+            <td>Nov 11, 2026</td>
+            <td>
+              <div class="actions">
+                <button class="btn-sm danger" onclick="removeNumber(2)">Remove</button>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td>#3</td>
+            <td>#2</td>
+            <td>DC Test 2</td>
+            <td><strong>9876543211</strong></td>
+            <td>DC2 Main</td>
+            <td>test-setup</td>
+            <td>Nov 11, 2026</td>
+            <td>
+              <div class="actions">
+                <button class="btn-sm danger" onclick="removeNumber(3)">Remove</button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top: 20px; padding: 12px; background: var(--bg-light); border-radius: 6px; font-size: 13px; color: var(--text-muted);">
+        📊 Total Allowed Numbers: 3 | DC1: 2 | DC2: 1
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MODALS ===== -->
+
+  <!-- Add/Edit DC Modal -->
+  <div id="dcModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span>Add Data Collector</span>
+        <button class="modal-close" onclick="closeDCModal()">✕</button>
+      </div>
+      <div class="form-group">
+        <label>Name *</label>
+        <input type="text" placeholder="DC Name">
+      </div>
+      <div class="form-group">
+        <label>Phone *</label>
+        <input type="tel" placeholder="Phone number">
+      </div>
+      <div class="form-group">
+        <label>Email *</label>
+        <input type="email" placeholder="Email">
+      </div>
+      <div class="form-group">
+        <label>Region</label>
+        <input type="text" placeholder="Region">
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" onclick="closeDCModal()">Cancel</button>
+        <button onclick="saveDC()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Employee Modal -->
+  <div id="employeeModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span>Add Employee</span>
+        <button class="modal-close" onclick="closeEmployeeModal()">✕</button>
+      </div>
+      <div class="form-group">
+        <label>Name *</label>
+        <input type="text" placeholder="Employee Name">
+      </div>
+      <div class="form-group">
+        <label>Phone *</label>
+        <input type="tel" placeholder="Phone number">
+      </div>
+      <div class="form-group">
+        <label>Email *</label>
+        <input type="email" placeholder="Email">
+      </div>
+      <div class="form-group">
+        <label>Department</label>
+        <select>
+          <option>-- Select Department --</option>
+          <option>Sales</option>
+          <option>Support</option>
+          <option>Engineering</option>
+        </select>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" onclick="closeEmployeeModal()">Cancel</button>
+        <button onclick="saveEmployee()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Number Modal -->
+  <div id="numberModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span>Add Allowed Number</span>
+        <button class="modal-close" onclick="closeNumberModal()">✕</button>
+      </div>
+      <div class="form-group">
+        <label>DC *</label>
+        <select>
+          <option>-- Select DC --</option>
+          <option>DC Test 1</option>
+          <option>DC Test 2</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Phone Number *</label>
+        <input type="tel" placeholder="Phone number">
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input type="text" placeholder="e.g., Main, Backup, etc.">
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" onclick="closeNumberModal()">Cancel</button>
+        <button onclick="saveNumber()">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function switchPage(page) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      document.getElementById(page).classList.add('active');
+      event.target.classList.add('active');
+    }
+
+    function openDCModal(id) {
+      document.getElementById('dcModal').classList.add('open');
+      document.querySelector('#dcModal .modal-header span').textContent = id ? `Edit DC #${id}` : 'Add Data Collector';
+    }
+
+    function closeDCModal() {
+      document.getElementById('dcModal').classList.remove('open');
+    }
+
+    function saveDC() {
+      alert('DC would be saved via POST /api/dcs or PATCH /api/dcs/{id}');
+      closeDCModal();
+    }
+
+    function openEmployeeModal(id) {
+      document.getElementById('employeeModal').classList.add('open');
+      document.querySelector('#employeeModal .modal-header span').textContent = id ? `Edit Employee #${id}` : 'Add Employee';
+    }
+
+    function closeEmployeeModal() {
+      document.getElementById('employeeModal').classList.remove('open');
+    }
+
+    function saveEmployee() {
+      alert('Employee would be saved via POST /api/employees or PATCH /api/employees/{id}');
+      closeEmployeeModal();
+    }
+
+    function openNumberModal() {
+      document.getElementById('numberModal').classList.add('open');
+    }
+
+    function closeNumberModal() {
+      document.getElementById('numberModal').classList.remove('open');
+    }
+
+    function saveNumber() {
+      alert('Number would be added via POST /api/allowed-numbers');
+      closeNumberModal();
+    }
+
+    function removeNumber(id) {
+      if(confirm('Remove this phone number?')) {
+        alert('Would call DELETE /api/allowed-numbers/' + id);
+      }
+    }
+
+    function filterByDC(dcId) {
+      if(dcId) alert('Would filter by DC ID: ' + dcId);
+    }
+
+    // Close modal on outside click
+    document.addEventListener('click', (e) => {
+      if(e.target.classList.contains('modal')) {
+        e.target.classList.remove('open');
+      }
+    });
+  </script>
+</body>
+</html>

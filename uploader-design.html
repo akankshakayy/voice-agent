@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Eko Sahayak Uploader – Icon Design System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --eko-amber: #FBB11B;
+      --eko-logo: url("data:image/webp;base64,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");
+      --bg-light: #FFFDF8;
+      --bg-dark: #1B1D22;
+      --text-dark: #1F2937;
+      --text-light: #F9FAFB;
+      --gray-600: #4B5563;
+      --gray-500: #6B7280;
+      --gray-400: #9CA3AF;
+      --gray-200: #E5E7EB;
+      --border-light: rgba(17, 24, 39, 0.06);
+      --shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.06), 0 12px 32px rgba(17, 24, 39, 0.12);
+      --shadow-flat: inset 0 0 0 1px rgba(17, 24, 39, 0.06);
+      --font-sans: "Inter", system-ui, sans-serif;
+      --themed-light-bg: #DCE6F2;
+      --themed-dark-bg: #263244;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page-bg: var(--bg-dark);
+        --text-primary: var(--text-light);
+        --text-secondary: var(--gray-400);
+        --card-bg: #262D38;
+        --border: rgba(255, 255, 255, 0.1);
+      }
+    }
+
+    :root:not([data-theme="light"]) {
+      --page-bg: var(--bg-dark);
+      --text-primary: var(--text-light);
+      --text-secondary: var(--gray-400);
+      --card-bg: #262D38;
+      --border: rgba(255, 255, 255, 0.1);
+    }
+
+    :root[data-theme="light"] {
+      --page-bg: #F7F5F0;
+      --text-primary: var(--text-dark);
+      --text-secondary: var(--gray-500);
+      --card-bg: #FFFFFF;
+      --border: var(--border-light);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--page-bg);
+      color: var(--text-primary);
+      transition: background 0.3s, color 0.3s;
+      padding: 40px 20px;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    header {
+      margin-bottom: 60px;
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      letter-spacing: -0.01em;
+    }
+
+    .subtitle {
+      font-size: 16px;
+      color: var(--text-secondary);
+    }
+
+    /* ===== ICON COMPONENT ===== */
+    .icon-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      font-family: var(--font-sans);
+      flex-direction: column;
+    }
+
+    .icon-logo {
+      flex-shrink: 0;
+      background: var(--eko-logo);
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+    }
+
+    .icon-text-sahayak {
+      font-weight: 700;
+      line-height: 1.1;
+      letter-spacing: -0.01em;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .icon-text-uploader {
+      display: flex;
+      align-items: center;
+      font-weight: 500;
+      line-height: 1.2;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .icon-arrow svg {
+      width: 1em;
+      height: 1em;
+      flex-shrink: 0;
+      stroke-width: 2.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* ===== SHOWCASE SECTIONS ===== */
+    section {
+      margin-bottom: 80px;
+    }
+
+    section > h2 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 40px;
+      letter-spacing: -0.01em;
+      color: var(--text-primary);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 40px;
+      margin-bottom: 60px;
+    }
+
+    @media (max-width: 900px) {
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Hero showcase */
+    .hero-showcase {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .hero-icon-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .hero-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-light);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+
+    .hero-label {
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    /* Anatomy diagram */
+    .anatomy {
+      position: relative;
+      width: 432px;
+      height: 432px;
+      background: var(--bg-light);
+      border: 1.5px dashed #9CA3AF;
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+
+    .anatomy-icon {
+      position: absolute;
+      left: 72px;
+      top: 72px;
+      width: 288px;
+      height: 288px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1.5px dashed #1F2937;
+    }
+
+    .anatomy-safe-zone {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 264px;
+      height: 264px;
+      border: 2px dashed #D9861A;
+      border-radius: 50%;
+      pointer-events: none;
+    }
+
+    .anatomy-legend {
+      display: grid;
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Masks showcase */
+    .masks-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 32px;
+      margin-bottom: 32px;
+    }
+
+    .mask-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .mask-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-light);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+
+    .mask-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+      text-align: center;
+    }
+
+    /* Sizes showcase */
+    .sizes-row {
+      display: flex;
+      gap: 40px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 40px;
+    }
+
+    .size-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .size-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-light);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+
+    .size-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    /* Home screen previews */
+    .homescreen-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 24px;
+    }
+
+    .homescreen-preview {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .homescreen-device {
+      width: 100%;
+      aspect-ratio: 3/5;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 8px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+
+    .homescreen-grid-3x3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      row-gap: 20px;
+      width: 100%;
+      height: 100%;
+      padding: 8px;
+      align-content: start;
+    }
+
+    .homescreen-app-slot {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .homescreen-app-icon {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .homescreen-app-label {
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      width: 64px;
+      text-align: center;
+    }
+
+    .homescreen-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    /* Play Store icon */
+    .play-store-showcase {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .play-store-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-light);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+
+    .play-store-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    /* ===== LOGO LOCKUP ===== */
+    .lockup-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+
+    .lockup-logo {
+      flex-shrink: 0;
+      background: var(--eko-logo);
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+      aspect-ratio: 250/120;
+    }
+
+    .lockup-divider {
+      width: 1px;
+      height: 48px;
+      background: var(--text-dark);
+      opacity: 0.1;
+      flex-shrink: 0;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .lockup-divider {
+        background: var(--text-light);
+      }
+    }
+
+    .lockup-text {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .lockup-title {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text-primary);
+    }
+
+    .lockup-subtitle {
+      font-size: 14px;
+      font-weight: 400;
+      color: var(--text-secondary);
+    }
+
+    /* ===== IN-APP HEADER ===== */
+    .app-header {
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-radius: 8px 8px 0 0;
+    }
+
+    .header-logo {
+      flex-shrink: 0;
+      background: var(--eko-logo);
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+      aspect-ratio: 250/120;
+    }
+
+    .header-text {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .header-title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text-primary);
+    }
+
+    .header-subtitle {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    /* ===== THEMING ===== */
+    .export-notes {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      margin-top: 60px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .export-notes h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: var(--text-primary);
+    }
+
+    .export-notes pre {
+      background: var(--bg-light);
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 12px;
+      margin: 12px 0;
+      color: var(--text-dark);
+    }
+
+    .export-notes ul {
+      margin: 12px 0 12px 20px;
+    }
+
+    .export-notes li {
+      margin: 6px 0;
+      color: var(--text-secondary);
+    }
+
+    .theme-toggle {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: var(--eko-amber);
+      border: none;
+      border-radius: 50%;
+      width: 48px;
+      height: 48px;
+      font-size: 20px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+
+    .theme-toggle:hover {
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <button class="theme-toggle" id="themeToggle">🌙</button>
+
+  <div class="container">
+    <header>
+      <h1>Eko Sahayak Uploader</h1>
+      <p class="subtitle">Icon Design System & Branding</p>
+    </header>
+
+    <!-- ===== ICON COMPONENT SHOWCASE ===== -->
+    <section>
+      <h2>App Icon Showcase</h2>
+
+      <div class="grid-2">
+        <!-- Hero -->
+        <div class="hero-showcase">
+          <div class="hero-icon-wrapper">
+            <div class="hero-icon" id="heroIcon" style="width: 280px; height: 280px; border-radius: 22%;"></div>
+            <div class="hero-label">Sahayak Uploader</div>
+          </div>
+        </div>
+
+        <!-- Anatomy Guide -->
+        <div>
+          <div class="anatomy">
+            <div class="anatomy-icon" id="anatomyIcon"></div>
+            <div class="anatomy-safe-zone"></div>
+          </div>
+          <div class="anatomy-legend">
+            <div class="legend-item">
+              <div style="width: 12px; height: 12px; border: 1.5px dashed #9CA3AF; flex-shrink: 0;"></div>
+              <span>108dp canvas (outer box)</span>
+            </div>
+            <div class="legend-item">
+              <div style="width: 12px; height: 12px; border: 1.5px dashed #1F2937; flex-shrink: 0;"></div>
+              <span>72dp visible area (inner square)</span>
+            </div>
+            <div class="legend-item">
+              <div style="width: 12px; height: 12px; border: 2px dashed #D9861A; border-radius: 50%; flex-shrink: 0;"></div>
+              <span>66dp safe zone (circle)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Masks -->
+      <div style="margin-top: 60px;">
+        <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 24px;">Mask Variations</h3>
+        <div class="masks-grid">
+          <div class="mask-item">
+            <div class="mask-icon" id="maskCircle" style="width: 176px; height: 176px; border-radius: 50%;"></div>
+            <div class="mask-label">Circle (50%)</div>
+          </div>
+          <div class="mask-item">
+            <div class="mask-icon" id="maskSquircle" style="width: 176px; height: 176px; border-radius: 36%;"></div>
+            <div class="mask-label">Squircle (36%)</div>
+          </div>
+          <div class="mask-item">
+            <div class="mask-icon" id="maskRounded" style="width: 176px; height: 176px; border-radius: 22%;"></div>
+            <div class="mask-label">Rounded Square (22%)</div>
+          </div>
+          <div class="mask-item">
+            <div class="mask-icon" id="maskSquare" style="width: 176px; height: 176px; border-radius: 0%;"></div>
+            <div class="mask-label">Full Square (0%)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sizes -->
+      <div style="margin-top: 60px;">
+        <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 24px;">Sizes</h3>
+        <div class="sizes-row">
+          <div class="size-item">
+            <div class="size-icon" id="size192" style="width: 192px; height: 192px; border-radius: 50%;"></div>
+            <div class="size-label">192 × 192 px</div>
+          </div>
+          <div class="size-item">
+            <div class="size-icon" id="size96" style="width: 96px; height: 96px; border-radius: 50%;"></div>
+            <div class="size-label">96 × 96 px</div>
+          </div>
+          <div class="size-item">
+            <div class="size-icon" id="size48" style="width: 48px; height: 48px; border-radius: 50%;"></div>
+            <div class="size-label">48 × 48 px<br><em style="font-size: 11px;">Text illegible</em></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Play Store -->
+      <div style="margin-top: 60px;">
+        <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 24px;">Google Play Store (512×512, full square)</h3>
+        <div class="play-store-showcase">
+          <div class="play-store-icon" id="playStore" style="width: 256px; height: 256px; border-radius: 0%;"></div>
+          <div class="play-store-label">Shown at 256px</div>
+        </div>
+      </div>
+
+      <!-- Home Screen Previews -->
+      <div style="margin-top: 60px;">
+        <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 24px;">Home Screen Previews</h3>
+        <div class="homescreen-grid">
+          <div class="homescreen-preview">
+            <div class="homescreen-label">Light Wallpaper</div>
+            <div class="homescreen-device" style="background: #E9E3D8;">
+              <div class="homescreen-grid-3x3">
+                <div style="width: 60px; height: 60px; background: #C4B5A0; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #C4B5A0; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div class="homescreen-app-slot">
+                  <div class="homescreen-app-icon" id="hs1" style="background: var(--bg-light);"></div>
+                  <div class="homescreen-app-label">Sahayak Uploader</div>
+                </div>
+                <div style="width: 60px; height: 60px; background: #C4B5A0; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #C4B5A0; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #C4B5A0; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #C4B5A0; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #C4B5A0; border-radius: 50%; justify-self: center; align-self: start;"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="homescreen-preview">
+            <div class="homescreen-label">Dark Wallpaper</div>
+            <div class="homescreen-device" style="background: #1B1D22;">
+              <div class="homescreen-grid-3x3">
+                <div style="width: 60px; height: 60px; background: #2A3039; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #2A3039; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div class="homescreen-app-slot">
+                  <div class="homescreen-app-icon" id="hs2" style="background: var(--bg-light);"></div>
+                  <div class="homescreen-app-label">Sahayak Uploader</div>
+                </div>
+                <div style="width: 60px; height: 60px; background: #2A3039; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #2A3039; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #2A3039; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #2A3039; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #2A3039; border-radius: 50%; justify-self: center; align-self: start;"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="homescreen-preview">
+            <div class="homescreen-label">Themed Light</div>
+            <div class="homescreen-device" style="background: #EEF2F7;">
+              <div class="homescreen-grid-3x3">
+                <div style="width: 60px; height: 60px; background: #D1D8E8; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #D1D8E8; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div class="homescreen-app-slot">
+                  <div class="homescreen-app-icon" id="hs3" style="background: var(--themed-light-bg);"></div>
+                  <div class="homescreen-app-label">Sahayak Uploader</div>
+                </div>
+                <div style="width: 60px; height: 60px; background: #D1D8E8; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #D1D8E8; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #D1D8E8; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #D1D8E8; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #D1D8E8; border-radius: 50%; justify-self: center; align-self: start;"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="homescreen-preview">
+            <div class="homescreen-label">Themed Dark</div>
+            <div class="homescreen-device" style="background: #12161C;">
+              <div class="homescreen-grid-3x3">
+                <div style="width: 60px; height: 60px; background: #1A1F2E; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #1A1F2E; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div class="homescreen-app-slot">
+                  <div class="homescreen-app-icon" id="hs4" style="background: var(--themed-dark-bg);"></div>
+                  <div class="homescreen-app-label">Sahayak Uploader</div>
+                </div>
+                <div style="width: 60px; height: 60px; background: #1A1F2E; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #1A1F2E; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #1A1F2E; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #1A1F2E; border-radius: 50%; justify-self: center; align-self: start;"></div>
+                <div style="width: 60px; height: 60px; background: #1A1F2E; border-radius: 50%; justify-self: center; align-self: start;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== LOGO LOCKUP ===== -->
+    <section>
+      <h2>Logo Lockup</h2>
+      <div class="grid-2">
+        <div>
+          <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--text-secondary);">Light Theme</h3>
+          <div class="lockup-card" style="background: #FFFFFF; border-color: var(--gray-200);">
+            <div class="lockup-logo" style="height: 56px;"></div>
+            <div class="lockup-divider" style="background: var(--gray-200);"></div>
+            <div class="lockup-text">
+              <div class="lockup-title" style="color: #111827;">Sahayak Uploader</div>
+              <div class="lockup-subtitle" style="color: #6B7280;">Call Recording</div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--text-secondary);">Dark Theme</h3>
+          <div class="lockup-card" style="background: #111827; border-color: #374151;">
+            <div class="lockup-logo" style="height: 56px;"></div>
+            <div class="lockup-divider" style="background: #374151;"></div>
+            <div class="lockup-text">
+              <div class="lockup-title" style="color: #F9FAFB;">Sahayak Uploader</div>
+              <div class="lockup-subtitle" style="color: #9CA3AF;">Call Recording</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== IN-APP HEADER ===== -->
+    <section>
+      <h2>In-App Header</h2>
+      <div class="grid-2">
+        <div>
+          <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--text-secondary);">Light Theme</h3>
+          <div class="app-header" style="background: #FFFFFF; border-color: var(--gray-200); margin-bottom: 24px;">
+            <div class="header-logo" style="height: 24px;"></div>
+            <div class="header-text">
+              <div class="header-title" style="color: #111827;">Sahayak Uploader</div>
+              <div class="header-subtitle" style="color: #6B7280;">Call Recording</div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--text-secondary);">Dark Theme</h3>
+          <div class="app-header" style="background: #1F2937; border-color: #374151;">
+            <div class="header-logo" style="height: 24px;"></div>
+            <div class="header-text">
+              <div class="header-title" style="color: #F9FAFB;">Sahayak Uploader</div>
+              <div class="header-subtitle" style="color: #9CA3AF;">Call Recording</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== ANDROID EXPORT NOTES ===== -->
+    <section>
+      <div class="export-notes">
+        <h3>Android Export Notes</h3>
+        <ul>
+          <li><strong>Adaptive Icon:</strong>
+            <ul>
+              <li>Background layer: solid #FFFDF8</li>
+              <li>Foreground layer: Eko logo + "Sahayak Uploader" text stack, entirely within the 66dp safe zone of the 108dp canvas</li>
+              <li>Monochrome layer: Silhouette of logo + text, filled with system accent color</li>
+            </ul>
+          </li>
+          <li><strong>Play Store Icon:</strong> 512×512 full square (no rounding); Google Play applies its own mask</li>
+          <li><strong>Small Sizes:</strong> Text illegible below 96px. Logo-only variant for future consideration.</li>
+          <li><strong>Brand Color:</strong> --eko-amber: #FBB11B (pixel-identical to original logo, never substitute)</li>
+        </ul>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // Render icon component
+    function renderIcon(size, shape, variant) {
+      const container = document.createElement('div');
+      container.className = 'icon-container';
+      container.style.width = size + 'px';
+      container.style.height = size + 'px';
+      container.style.borderRadius = {
+        'circle': '50%',
+        'squircle': '36%',
+        'rounded': '22%',
+        'square': '0%'
+      }[shape];
+
+      const bgColor = {
+        'color': 'var(--bg-light)',
+        'themed-light': 'var(--themed-light-bg)',
+        'themed-dark': 'var(--themed-dark-bg)'
+      }[variant];
+
+      const textColor = {
+        'color': 'var(--text-dark)',
+        'themed-light': 'var(--text-dark)',
+        'themed-dark': 'var(--text-light)'
+      }[variant];
+
+      const arrowColor = {
+        'color': '#D9861A',
+        'themed-light': 'var(--text-dark)',
+        'themed-dark': 'var(--text-light)'
+      }[variant];
+
+      container.style.background = bgColor;
+      container.style.color = textColor;
+
+      // Logo (43% of size)
+      const logo = document.createElement('div');
+      logo.className = 'icon-logo';
+      logo.style.width = (size * 0.43) + 'px';
+      logo.style.aspectRatio = '250/120';
+      logo.style.marginBottom = (size * 0.05) + 'px';
+
+      // Apply monochrome mask for themed variants
+      if (variant !== 'color') {
+        logo.style.backgroundImage = 'none';
+        logo.style.WebkitMaskImage = 'var(--eko-logo)';
+        logo.style.maskImage = 'var(--eko-logo)';
+        logo.style.WebkitMaskSize = 'contain';
+        logo.style.maskSize = 'contain';
+        logo.style.WebkitMaskRepeat = 'no-repeat';
+        logo.style.maskRepeat = 'no-repeat';
+        logo.style.backgroundColor = textColor;
+      }
+
+      container.appendChild(logo);
+
+      // "Sahayak" text
+      const sahayak = document.createElement('div');
+      sahayak.className = 'icon-text-sahayak';
+      sahayak.textContent = 'Sahayak';
+      sahayak.style.fontSize = (size * 0.118) + 'px';
+      sahayak.style.color = textColor;
+      container.appendChild(sahayak);
+
+      // "Uploader" line
+      const uploaderLine = document.createElement('div');
+      uploaderLine.className = 'icon-text-uploader';
+      uploaderLine.style.fontSize = (size * 0.078) + 'px';
+      uploaderLine.style.marginTop = '0.15em';
+      uploaderLine.style.gap = '0.25em';
+      uploaderLine.style.color = textColor;
+
+      // Arrow
+      const arrow = document.createElement('div');
+      arrow.className = 'icon-arrow';
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', arrowColor);
+      svg.setAttribute('stroke-width', '2.6');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+
+      const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path1.setAttribute('d', 'M12 16V6');
+      const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path2.setAttribute('d', 'M7.5 10.5L12 6l4.5 4.5');
+      const path3 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path3.setAttribute('d', 'M7 19.5h10');
+
+      svg.appendChild(path1);
+      svg.appendChild(path2);
+      svg.appendChild(path3);
+      arrow.appendChild(svg);
+      uploaderLine.appendChild(arrow);
+
+      const uploaderText = document.createElement('span');
+      uploaderText.textContent = 'Uploader';
+      uploaderLine.appendChild(uploaderText);
+
+      container.appendChild(uploaderLine);
+      return container;
+    }
+
+    // Mount icons
+    document.getElementById('heroIcon').appendChild(renderIcon(280, 'rounded', 'color'));
+    document.getElementById('anatomyIcon').appendChild(renderIcon(288, 'square', 'color'));
+    document.getElementById('maskCircle').appendChild(renderIcon(176, 'circle', 'color'));
+    document.getElementById('maskSquircle').appendChild(renderIcon(176, 'squircle', 'color'));
+    document.getElementById('maskRounded').appendChild(renderIcon(176, 'rounded', 'color'));
+    document.getElementById('maskSquare').appendChild(renderIcon(176, 'square', 'color'));
+    document.getElementById('size192').appendChild(renderIcon(192, 'circle', 'color'));
+    document.getElementById('size96').appendChild(renderIcon(96, 'circle', 'color'));
+    document.getElementById('size48').appendChild(renderIcon(48, 'circle', 'color'));
+    document.getElementById('playStore').appendChild(renderIcon(256, 'square', 'color'));
+    document.getElementById('hs1').appendChild(renderIcon(60, 'circle', 'color'));
+    document.getElementById('hs2').appendChild(renderIcon(60, 'circle', 'color'));
+    document.getElementById('hs3').appendChild(renderIcon(60, 'circle', 'themed-light'));
+    document.getElementById('hs4').appendChild(renderIcon(60, 'circle', 'themed-dark'));
+
+    // Theme toggle
+    const themeToggle = document.getElementById('themeToggle');
+    const htmlElement = document.documentElement;
+    const savedTheme = localStorage.getItem('eko-uploader-theme') || 'light';
+    htmlElement.setAttribute('data-theme', savedTheme);
+    updateThemeButton(savedTheme);
+
+    themeToggle.addEventListener('click', () => {
+      const currentTheme = htmlElement.getAttribute('data-theme') || 'light';
+      const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+      htmlElement.setAttribute('data-theme', newTheme);
+      localStorage.setItem('eko-uploader-theme', newTheme);
+      updateThemeButton(newTheme);
+    });
+
+    function updateThemeButton(theme) {
+      themeToggle.textContent = theme === 'light' ? '🌙' : '☀️';
+    }
+  </script>
+</body>
+</html>
