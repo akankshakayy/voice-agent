@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import agent, auth, bootstrap, bulk_load, db, google_auth, integrations, mailer, metrics, misheard, recordings, report, stt, telemetry, tts  # noqa: E402
+from . import agent, auth, autogmap, bootstrap, bulk_load, db, google_auth, integrations, mailer, metrics, misheard, recordings, report, stt, telemetry, tts  # noqa: E402
 from .logging_config import setup_logging  # noqa: E402
 from .seed import seed_if_demo  # noqa: E402
 from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, MAX_MISUNDERSTOOD  # noqa
@@ -54,6 +54,7 @@ async def lifespan(_app):
     threading.Thread(target=_reap_stale_calls, args=(stop,), daemon=True, name="call-reaper").start()
     threading.Thread(target=recordings.processing_loop, args=(stop,), daemon=True, name="recordings").start()
     threading.Thread(target=integrations.delivery_loop, args=(stop,), daemon=True, name="webhooks").start()
+    threading.Thread(target=autogmap.sync_loop, args=(stop,), daemon=True, name="autogmap-sync").start()
     yield
     stop.set()
     integrations.wake()
@@ -1895,6 +1896,24 @@ def prachi_receive_recording(req: PrachiRecordingRequest, request: Request):
         msg = f"Internal error processing recording {req.recording_id}: {str(e)}"
         log.exception(f"Prachi API: {msg}")
         return JSONResponse({"detail": "Internal error processing recording"}, status_code=500)
+
+
+# ------------------------------------------------------------------ AutoGMap (Phase 7a: Numbers Sync)
+@app.get("/api/autogmap/status", dependencies=[Depends(allow("admin", "ops"))])
+def autogmap_status():
+    """Get AutoGMap integration status: last sync, numbers count, success rate."""
+    stats = autogmap._get_sync().get_stats()
+
+    return {
+        "enabled": autogmap.AUTOGMAP_ENABLED,
+        "last_sync": stats.get("last_sync"),
+        "last_sync_success": stats.get("last_sync_success"),
+        "numbers_count": stats.get("numbers_count", 0),
+        "sync_count": stats.get("sync_count", 0),
+        "sync_failures": stats.get("sync_failures", 0),
+        "failure_streak": stats.get("failure_streak", 0),
+        "status": "OK" if stats.get("failure_streak", 0) < 3 else "ERROR",
+    }
 
 
 # ------------------------------------------------------------------ integrations (app/integrations.py, INTEGRATION.md)

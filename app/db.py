@@ -138,6 +138,12 @@ CREATE TABLE IF NOT EXISTS prachi_submissions (  -- DC recordings submitted to P
     file_path TEXT, status TEXT, attempts INTEGER,
     prachi_request_id TEXT, received_at REAL, processed_at REAL, error_message TEXT
 );
+CREATE TABLE IF NOT EXISTS autogmap_numbers (     -- Phase 7a: Cached AutoGMap applicant numbers
+    id INTEGER PRIMARY KEY, phone VARCHAR(20) UNIQUE NOT NULL, local VARCHAR(10),
+    name TEXT, since TEXT,                       -- since: when they became an applicant (ISO format)
+    synced_at REAL,                              -- when we last synced this record
+    active INTEGER DEFAULT 1                     -- 0 if they stopped being an applicant
+);
 CREATE TABLE IF NOT EXISTS api_keys (         -- other systems calling the API (app/integrations.py)
     id INTEGER PRIMARY KEY, key_hash TEXT UNIQUE, name TEXT, role TEXT, created_by TEXT,
     created_at REAL, last_used_at REAL, revoked_at REAL
@@ -282,6 +288,8 @@ CREATE INDEX IF NOT EXISTS idx_upload_tokens_employee ON upload_tokens(employee_
 CREATE INDEX IF NOT EXISTS idx_calls_started ON calls(started_at);
 CREATE INDEX IF NOT EXISTS idx_turns_call ON turns(call_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_rm ON tickets(rm_id, status);
+CREATE INDEX IF NOT EXISTS idx_autogmap_phone ON autogmap_numbers(phone);
+CREATE INDEX IF NOT EXISTS idx_autogmap_active ON autogmap_numbers(active, synced_at DESC);
 """
 
 _conn = None
@@ -391,6 +399,18 @@ def conn() -> sqlite3.Connection:
                 "mansi_api_sent_at": "REAL",
                 "mansi_request_id": "TEXT"
             })
+        except Exception as e:
+            pass  # Migrations may already be applied or table doesn't exist
+        # Phase 7a: AutoGMap integration columns
+        try:
+            _add_columns(_conn, "recordings", {
+                "autogmap_status": "VARCHAR(20)",      # pending | uploaded | failed | not_in_applicants
+                "autogmap_sent_at": "REAL",            # when we sent it to AutoGMap
+                "autogmap_error": "TEXT",              # error message if failed
+                "autogmap_attempts": "INTEGER DEFAULT 0"  # retry count
+            })
+            _conn.execute("CREATE INDEX IF NOT EXISTS idx_recordings_autogmap ON recordings(autogmap_status, uploaded_at DESC)")
+            _conn.commit()
         except Exception as e:
             pass  # Migrations may already be applied or table doesn't exist
     return _conn
