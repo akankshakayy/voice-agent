@@ -1,6 +1,5 @@
 package co.eko.sahayak.recsync
 
-import android.content.Context
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -12,7 +11,7 @@ import java.util.concurrent.TimeUnit
  * AutoGMap integration for fetching valid RM phone numbers.
  * Supports test numbers (marked with "test": true) for development/staging.
  */
-class AutoGMap(private val context: Context, private val apiKey: String, private val apiUrl: String) {
+class AutoGMap(private val apiKey: String, private val apiUrl: String) {
 
     data class PhoneNumber(
         val number: String,
@@ -85,9 +84,9 @@ class AutoGMap(private val context: Context, private val apiKey: String, private
                 val phone = numberObj.getString("phone")
                 // Future field: "test" (will be added by Mansi)
                 val isTest = numberObj.optBoolean("test", false)
-                val name = numberObj.optString("name", null)
-                val localInfo = numberObj.optString("local", null)
-                val since = numberObj.optString("since", null)
+                val name = numberObj.optString("name").takeIf { it.isNotEmpty() }
+                val localInfo = numberObj.optString("local").takeIf { it.isNotEmpty() }
+                val since = numberObj.optString("since").takeIf { it.isNotEmpty() }
 
                 val phoneNum = PhoneNumber(
                     number = phone,

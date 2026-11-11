@@ -70,10 +70,10 @@
                     android:textIsSelectable="true" />
             </LinearLayout>
 
-            <!-- Step 2: Mode & User Selection -->
+            <!-- Step 2: Mode &amp; User Selection -->
             <TextView
                 style="@style/Heading"
-                android:text="2. Select Mode & User" />
+                android:text="2. Select Mode &amp; User" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -122,10 +122,10 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- Step 3: SIM & Recording Folder -->
+            <!-- Step 3: SIM &amp; Recording Folder -->
             <TextView
                 style="@style/Heading"
-                android:text="3. Eko SIM & Recording Folder" />
+                android:text="3. Eko SIM &amp; Recording Folder" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -164,7 +164,7 @@
                     android:text="Select where call recordings are saved" />
             </LinearLayout>
 
-            <!-- Step 4: Schedule & Upload -->
+            <!-- Step 4: Schedule &amp; Upload -->
             <TextView
                 style="@style/Heading"
                 android:text="4. Upload Schedule" />
@@ -216,7 +216,7 @@
                     android:textIsSelectable="true"
                     android:textSize="12sp"
                     android:textColor="@color/text_secondary"
-                    android:textMonospace="true"
+                    android:fontFamily="monospace"
                     android:minHeight="100dp" />
             </LinearLayout>
         </LinearLayout>

@@ -16,9 +16,6 @@ class RecordingUploaderTest {
     private lateinit var api: Api
     private lateinit var autoGMap: AutoGMap
     private lateinit var uploader: RecordingUploader
-    private val mockContext = object : Context() {
-        override fun getApplicationContext() = this
-    }
 
     private val testFile = RecFile("uri", "test.m4a", 1024, System.currentTimeMillis())
     private val testCall = CallEntry(
@@ -35,7 +32,7 @@ class RecordingUploaderTest {
         server.start()
 
         api = Api(server.url("").toString(), "test-token")
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
         uploader = RecordingUploader(api, autoGMap)
     }
 
@@ -118,6 +115,7 @@ class RecordingUploaderTest {
             file = testFile,
             call = testCall,
             deviceId = "device1",
+            rmId = -1,
             dcId = 201,
             mode = "dc"
         )
@@ -135,6 +133,7 @@ class RecordingUploaderTest {
             file = testFile,
             call = testCall,
             deviceId = "device1",
+            rmId = -1,
             employeeId = 301,
             mode = "employee"
         )

@@ -15,10 +15,6 @@ import org.junit.Test
 class AutoGMapTest {
     private lateinit var server: MockWebServer
     private lateinit var autoGMap: AutoGMap
-    private val mockContext = object : Context() {
-        override fun getApplicationContext() = this
-        // Mock context - minimal implementation for AutoGMap
-    }
 
     @Before
     fun setup() {
@@ -54,7 +50,7 @@ class AutoGMapTest {
         }"""
 
         server.enqueue(MockResponse().setBody(response))
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
 
         val result = autoGMap.syncNumbers()
 
@@ -97,7 +93,7 @@ class AutoGMapTest {
         }"""
 
         server.enqueue(MockResponse().setBody(response))
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
 
         val result = autoGMap.syncNumbers()
 
@@ -117,7 +113,7 @@ class AutoGMapTest {
         }"""
 
         server.enqueue(MockResponse().setBody(response))
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
 
         autoGMap.syncNumbers()
 
@@ -136,7 +132,7 @@ class AutoGMapTest {
         }"""
 
         server.enqueue(MockResponse().setBody(response))
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
 
         autoGMap.syncNumbers()
 
@@ -156,7 +152,7 @@ class AutoGMapTest {
         }"""
 
         server.enqueue(MockResponse().setBody(response))
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
 
         autoGMap.syncNumbers()
 
@@ -178,7 +174,7 @@ class AutoGMapTest {
         }"""
 
         server.enqueue(MockResponse().setBody(response))
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
 
         autoGMap.syncNumbers()
 
@@ -191,7 +187,7 @@ class AutoGMapTest {
     @Test
     fun handleNetworkError() {
         server.enqueue(MockResponse().setResponseCode(500))
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
 
         val result = autoGMap.syncNumbers()
 
@@ -203,7 +199,7 @@ class AutoGMapTest {
     @Test
     fun handleAuthenticationError() {
         server.enqueue(MockResponse().setResponseCode(401))
-        autoGMap = AutoGMap(mockContext, "bad-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "bad-key", server.url("/numbers").toString())
 
         val result = autoGMap.syncNumbers()
 
@@ -217,7 +213,7 @@ class AutoGMapTest {
         val response = """{"count": 0, "numbers": []}"""
 
         server.enqueue(MockResponse().setBody(response))
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
 
         val result = autoGMap.syncNumbers()
 
@@ -235,7 +231,7 @@ class AutoGMapTest {
         }"""
 
         server.enqueue(MockResponse().setBody(response))
-        autoGMap = AutoGMap(mockContext, "test-key", server.url("/numbers").toString())
+        autoGMap = AutoGMap( "test-key", server.url("/numbers").toString())
 
         autoGMap.syncNumbers()
         assertTrue("Number should exist after sync", autoGMap.isValidNumber("9876543210"))
