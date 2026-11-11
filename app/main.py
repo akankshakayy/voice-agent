@@ -1233,9 +1233,17 @@ def uploader_upload(audio: UploadFile = File(...), started_at: int | None = Form
                     mode: str = Form("rm"), consent_token: str | None = Form(None),
                     device=Depends(_device)):
     """Upload a recording. Mode-aware: validates mode-specific constraints."""
+    # Validate audio format first (Mansi requirement)
+    filename = audio.filename or ""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in recordings.AUDIO_EXTS:
+        raise HTTPException(400, f"Invalid audio format: .{ext}. Accepted: {', '.join(sorted(recordings.AUDIO_EXTS))}")
+
+    # Validate file size (Mansi requirement: max 60 MB)
     data = audio.file.read(recordings.MAX_BYTES + 1)
     if len(data) > recordings.MAX_BYTES:
-        raise HTTPException(413, "Recording is over 100 MB")
+        max_mb = recordings.MAX_BYTES // (1024 * 1024)
+        raise HTTPException(413, f"Recording is over {max_mb} MB limit")
     try:
         # Validate mode matches token
         if mode != device.get("mode", "rm"):

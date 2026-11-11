@@ -48,7 +48,7 @@ except ImportError:
 
 log = logging.getLogger("eko.recordings")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MAX_BYTES = 100 * 1024 * 1024
+MAX_BYTES = 60 * 1024 * 1024  # Mansi's requirement: max 60 MB per recording
 MAX_ATTEMPTS = 3                 # a recording that fails this many runs is marked failed
 MAX_PROMPT_CHARS = 9000          # ~3k tokens: fits a Groq free-tier minute with room for the answer
 RATE_LIMIT_RETRIES = 3

@@ -233,9 +233,23 @@ class AutoGMapClient:
             return False, "file_not_found", {"error": "File not found"}
 
         file_size = os.path.getsize(file_path)
+        max_size_bytes = 60 * 1024 * 1024  # Mansi's requirement: 60 MB max
+
         if file_size == 0:
             log.error("Recording file is empty: %s", file_path)
             return False, "file_error", {"error": "File is empty"}
+
+        # Pre-check: reject files that exceed Mansi's 60 MB limit
+        if file_size > max_size_bytes:
+            log.error(
+                "Recording file exceeds 60 MB limit: %s (size: %d bytes = %.1f MB)",
+                file_path,
+                file_size,
+                file_size / (1024 * 1024),
+            )
+            return False, "file_too_large", {
+                "error": f"File too large: {file_size // (1024*1024)}MB exceeds 60MB limit"
+            }
 
         log.debug(
             "Uploading recording to AutoGMap: phone=%s, direction=%s, duration=%d, size=%d bytes",
@@ -271,6 +285,7 @@ class AutoGMapClient:
                         timeout=60,
                     )
 
+            # Mansi API Response Codes: 201=kept, 422=not_applicant/not_audio/too_large, 401=auth_fail
             if response.status_code == 201:
                 log.info(
                     "Recording uploaded to AutoGMap: phone=%s, file=%s, size=%d bytes",
@@ -287,7 +302,31 @@ class AutoGMapClient:
                 except Exception:
                     return True, "uploaded", {"status": "accepted"}
 
+            if response.status_code == 401:
+                log.error(
+                    "AutoGMap authentication failed: invalid/missing API key"
+                )
+                return False, "auth_error", {
+                    "error": "Authentication failed: check AUTOGMAP_API_KEY"
+                }
+
             if response.status_code == 422:
+                # Mansi returns 422 for: not in applicants, not audio file, or >60MB
+                log.warning(
+                    "Recording rejected by AutoGMap (422): phone=%s, file=%s, size=%d bytes. Likely: not in applicants, invalid format, or >60MB",
+                    phone,
+                    file_path,
+                    file_size,
+                )
+                # Check file size to provide better error message
+                max_size_mb = 60
+                if file_size > (max_size_mb * 1024 * 1024):
+                    return False, "file_too_large", {
+                        "error": f"File too large: {file_size // (1024*1024)}MB > {max_size_mb}MB limit"
+                    }
+                return False, "not_in_applicants", {
+                    "error": f"Recording rejected: phone not in applicants, invalid audio format, or file too large"
+                }
                 log.warning(
                     "Recording not in AutoGMap applicants: phone=%s, file=%s",
                     phone,
