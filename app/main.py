@@ -1779,31 +1779,27 @@ def mansi_recordings(
 @app.get("/api/recordings", dependencies=[Depends(allow("admin", "ops", "rm"))])
 def list_recordings(request: Request, status: str | None = None, rm_id: int | None = None, limit: int = 500, call_type: str | None = None, mode: str | None = None, employee_id: int | None = None):
     u = request.state.user
-    # Admin/Ops: can view all recordings, or filter to specific RM if requested
-    # RM: can only view their own recordings (rm_id forced to their own)
     if u.get("role") == "rm":
-        rm_id = u["rm_id"]  # RMs always see only their own recordings
-    # else: admin/ops see all if rm_id=None, or filtered if rm_id is specified
-
-    # Log the API call for debugging data issues
-    log.info(f"API: /api/recordings - user={u.get('email')}, status={status}, rm_id={rm_id}, limit={limit}, call_type={call_type}, mode={mode}, employee_id={employee_id}")
+        rm_id = u["rm_id"]
 
     try:
+        # Test 1: Can we get counts?
         counts = recordings.summary_counts(rm_id)
-        log.debug(f"  Counts: {counts}")
 
+        # Test 2: Can we get recordings?
         recs = recordings.list_recordings(status, rm_id, limit, call_type, mode, employee_id)
-        log.info(f"  Returned {len(recs)} recordings (expected by counts: {sum(counts.values())})")
 
-        if sum(counts.values()) > 0 and len(recs) == 0:
-            log.error(f"⚠️  DATA MISMATCH: Database shows {sum(counts.values())} recordings but list_recordings returned 0!")
-            log.error(f"    This may indicate: missing files, database sync issues, or JOIN failures")
-
+        # Test 3: Can we add accuracy?
         result = [recordings.add_transcription_accuracy(r) for r in recs]
+
+        # Test 4: Return the response
         return {"counts": counts, "recordings": result}
     except Exception as e:
-        log.error(f"  ERROR in /api/recordings: {type(e).__name__}: {e}", exc_info=True)
-        raise HTTPException(500, f"{type(e).__name__}: {str(e)[:200]}")
+        import traceback
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        log.error(f"ERROR in /api/recordings: {error_msg}")
+        log.error(traceback.format_exc())
+        raise HTTPException(500, error_msg)
 
 
 def _own_recording(request: Request, rec_id: int) -> dict:
