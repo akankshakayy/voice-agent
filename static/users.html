@@ -64,11 +64,16 @@
   </section>
   <section class="panel" style="margin-top:14px">
     <h2>Recorder uploads <span class="small muted" id="tokcount"></span></h2>
-    <p class="small muted">Each RM phone running the Sahayak Recorder Sync app needs its own upload token. The app sends the
-      dialer's recordings of Eko-SIM calls every evening; they are transcribed and reviewed at the daily run.
+    <p class="small muted">Each phone running the Sahayak Recorder Sync app needs its own upload token. The app sends
+      the dialer's recordings of Eko-SIM calls every evening; they are transcribed and reviewed at the daily run.
       Server address for the app: <b id="origin"></b></p>
     <div class="tokform">
-      <select id="tokrm" aria-label="RM"></select>
+      <select id="tokmode" aria-label="Recorder type">
+        <option value="rm">RM</option>
+        <option value="dc">Data Collector</option>
+        <option value="employee">Employee</option>
+      </select>
+      <select id="tokentity" aria-label="Person"></select>
       <input id="toklabel" placeholder="Label, e.g. Asha's Redmi" maxlength="80">
       <button id="tokcreate">Create token</button>
     </div>
@@ -81,6 +86,8 @@
 document.getElementById("nav").innerHTML = navHtml("users");
 const $ = id => document.getElementById(id);
 let RMS = [];
+let DCS = [];
+let EMPLOYEES = [];
 const ROLE_OPTS = [["pending", "No access"], ["rm", "RM"], ["ops", "Ops"], ["admin", "Admin"]];
 
 function row(u) {
@@ -148,8 +155,26 @@ $("list").onclick = async e => {
 
 function tokRow(t) {
   const used = t.last_upload_at ? `last upload ${ago(t.last_upload_at)}` : "no uploads yet";
+  let entityName = "Unknown";
+  let modeLabel = "RM";
+  let isShared = false;
+
+  if (t.mode === "dc") {
+    entityName = t.dc_name || "Any DC";
+    modeLabel = "DC";
+    isShared = !t.dc_id;
+  } else if (t.mode === "employee") {
+    entityName = t.employee_name || "Any Employee";
+    modeLabel = "Employee";
+    isShared = !t.employee_id;
+  } else {
+    entityName = t.rm_name || "Any RM";
+    modeLabel = "RM";
+    isShared = !t.rm_id;
+  }
+
   return `<div class="trow ${t.revoked_at ? "revoked" : ""}" data-id="${t.id}">
-    <div><b>${esc(t.rm_name || "Any RM")}</b><div class="small muted">${esc(t.label || "no label")}${t.rm_id ? "" : " · RM chosen in the app"}</div></div>
+    <div><b>${esc(entityName)}</b><div class="small muted">${esc(t.label || "no label")}${!isShared ? "" : ` · ${modeLabel} chosen in the app`}</div></div>
     <div class="small">${num(t.uploads)} recording${t.uploads === 1 ? "" : "s"}<div class="muted">${used}</div></div>
     <div class="small muted">made ${fmtTime(t.created_at)}${t.created_by ? " by " + esc(t.created_by) : ""}${t.revoked_at ? " · revoked " + fmtTime(t.revoked_at) : ""}</div>
     <div>${t.revoked_at ? "" : `<button class="danger revoke">Revoke</button>`}</div>
@@ -162,11 +187,60 @@ async function loadTokens() {
   $("tokens").innerHTML = toks.map(tokRow).join("") || `<p class="muted">No phones set up yet.</p>`;
 }
 
+function updateEntityDropdown() {
+  const mode = $("tokmode").value;
+  const entitySelect = $("tokentity");
+  let options = "";
+  let entities = [];
+
+  if (mode === "rm") {
+    entities = RMS;
+    options = RMS.map(r => `<option value="${r.id}">${esc(r.name)} · ${esc(r.region || "")}</option>`).join("");
+    options += `<option value="">Any RM (they choose their name in the app)</option>`;
+  } else if (mode === "dc") {
+    entities = DCS;
+    options = DCS.map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.region || "")}</option>`).join("");
+    options += `<option value="">Any DC (they choose their name in the app)</option>`;
+  } else if (mode === "employee") {
+    entities = EMPLOYEES;
+    options = EMPLOYEES.map(e => `<option value="${e.id}">${esc(e.name)} · ${esc(e.department || "")}</option>`).join("");
+    options += `<option value="">Any Employee (they choose their name in the app)</option>`;
+  }
+
+  entitySelect.innerHTML = options;
+}
+
+$("tokmode").onchange = updateEntityDropdown;
+
 $("tokcreate").onclick = async () => {
   try {
-    const rm = $("tokrm").value;
-    const t = await api("api/uploader/tokens", { method: "POST", body: { rm_id: rm ? Number(rm) : null, label: $("toklabel").value } });
-    $("newtok").innerHTML = `<div class="newtok"><b>${t.rm_name ? `Token for ${esc(t.rm_name)}` : "Shared token: each RM picks their name in the app"}</b> · paste it into the app on the phone. It is shown only now.
+    const mode = $("tokmode").value;
+    const entity = $("tokentity").value;
+    const entityId = entity ? Number(entity) : null;
+
+    const body = { label: $("toklabel").value };
+    if (mode === "rm") {
+      body.rm_id = entityId;
+    } else if (mode === "dc") {
+      body.dc_id = entityId;
+    } else if (mode === "employee") {
+      body.employee_id = entityId;
+    }
+
+    const t = await api("api/uploader/tokens", { method: "POST", body });
+    let description = "";
+    if (mode === "rm" && t.rm_name) {
+      description = `Token for ${esc(t.rm_name)}`;
+    } else if (mode === "dc" && t.dc_name) {
+      description = `Token for ${esc(t.dc_name)}`;
+    } else if (mode === "employee" && t.employee_name) {
+      description = `Token for ${esc(t.employee_name)}`;
+    } else {
+      const modeName = mode === "rm" ? "RM" : mode === "dc" ? "DC" : "Employee";
+      description = `Shared token: each ${modeName} picks their name in the app`;
+    }
+
+    $("newtok").innerHTML = `<div class="newtok"><b>${description}</b> · paste it into the app on the phone. It is shown only now.
       <code>${esc(t.token)}</code><button class="secondary" id="tokcopy">Copy</button></div>`;
     $("tokcopy").onclick = () => navigator.clipboard?.writeText(t.token).then(() => toast("Token copied"));
     $("toklabel").value = "";
@@ -205,9 +279,10 @@ $("restoreBtn").onclick = async () => {
   await loadMe();
   loadRestore();
   RMS = await api("api/rms");
+  DCS = await api("api/dcs");
+  EMPLOYEES = await api("api/employees");
   $("origin").textContent = location.origin;
-  $("tokrm").innerHTML = RMS.map(r => `<option value="${r.id}">${esc(r.name)} · ${esc(r.region || "")}</option>`).join("")
-    + `<option value="">Any RM (they choose their name in the app)</option>`;
+  updateEntityDropdown();
   await load();
   await loadTokens();
 })();

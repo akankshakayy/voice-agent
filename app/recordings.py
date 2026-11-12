@@ -84,25 +84,50 @@ def _h(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-TOKEN_COLS = """t.id, t.rm_id, r.name AS rm_name, t.label, t.created_by, t.created_at, t.last_used_at, t.revoked_at,
+TOKEN_COLS = """t.id, t.rm_id, r.name AS rm_name, t.dc_id, d.name AS dc_name,
+                t.employee_id, e.name AS employee_name, t.mode, t.label, t.created_by, t.created_at,
+                t.last_used_at, t.revoked_at,
                 (SELECT COUNT(*) FROM recordings WHERE token_id=t.id) AS uploads,
                 (SELECT MAX(uploaded_at) FROM recordings WHERE token_id=t.id) AS last_upload_at"""
 
 
-def create_token(rm_id: int | None, label: str = "", created_by: str = "") -> dict:
+def create_token(rm_id: int | None = None, dc_id: int | None = None, employee_id: int | None = None,
+                 label: str = "", created_by: str = "") -> dict:
     """The token itself is returned only here; the database keeps just its hash.
-    rm_id=None makes a shared token: each RM picks their own name in the app, and it goes with every upload."""
-    if rm_id is not None and not db.q("SELECT id FROM rms WHERE id=?", (rm_id,), one=True):
-        raise ValueError("No such RM")
+    Exactly one of rm_id, dc_id, or employee_id must be provided. For rm_id, None makes a shared token where
+    each RM picks their own name in the app."""
+
+    # Validate that exactly one ID is provided (or rm_id is None for shared RM token)
+    ids_provided = sum(1 for id_ in [rm_id, dc_id, employee_id] if id_ is not None)
+    if ids_provided == 0:
+        raise ValueError("Must provide rm_id, dc_id, or employee_id")
+    if ids_provided > 1:
+        raise ValueError("Provide only one of rm_id, dc_id, or employee_id")
+
+    # Determine mode and validate entity exists
+    if rm_id is not None:
+        if not db.q("SELECT id FROM rms WHERE id=?", (rm_id,), one=True):
+            raise ValueError("No such RM")
+        mode = "rm"
+    elif dc_id is not None:
+        if not db.q("SELECT id FROM dcs WHERE id=?", (dc_id,), one=True):
+            raise ValueError("No such DC")
+        mode = "dc"
+    else:  # employee_id is not None
+        if not db.q("SELECT id FROM employees WHERE id=?", (employee_id,), one=True):
+            raise ValueError("No such Employee")
+        mode = "employee"
+
     token = "ekoup_" + secrets.token_urlsafe(24)
-    tid = db.x("INSERT INTO upload_tokens(token_hash,rm_id,label,created_by,created_at) VALUES(?,?,?,?,?)",
-               (_h(token), rm_id, (label or "").strip()[:80], created_by, time.time()))
-    return {**db.q(f"SELECT {TOKEN_COLS} FROM upload_tokens t LEFT JOIN rms r ON r.id=t.rm_id WHERE t.id=?",
-                   (tid,), one=True), "token": token}
+    tid = db.x("INSERT INTO upload_tokens(token_hash,rm_id,dc_id,employee_id,mode,label,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)",
+               (_h(token), rm_id, dc_id, employee_id, mode, (label or "").strip()[:80], created_by, time.time()))
+    sql = f"SELECT {TOKEN_COLS} FROM upload_tokens t LEFT JOIN rms r ON r.id=t.rm_id LEFT JOIN dcs d ON d.id=t.dc_id LEFT JOIN employees e ON e.id=t.employee_id WHERE t.id=?"
+    return {**db.q(sql, (tid,), one=True), "token": token}
 
 
 def list_tokens() -> list[dict]:
-    return db.q(f"SELECT {TOKEN_COLS} FROM upload_tokens t LEFT JOIN rms r ON r.id=t.rm_id ORDER BY t.id DESC")
+    sql = f"SELECT {TOKEN_COLS} FROM upload_tokens t LEFT JOIN rms r ON r.id=t.rm_id LEFT JOIN dcs d ON d.id=t.dc_id LEFT JOIN employees e ON e.id=t.employee_id ORDER BY t.id DESC"
+    return db.q(sql)
 
 
 def revoke_token(token_id: int) -> bool:

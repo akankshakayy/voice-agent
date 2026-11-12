@@ -1271,7 +1271,9 @@ def uploader_upload(audio: UploadFile = File(...), started_at: int | None = Form
 
 
 class UploadTokenBody(BaseModel):
-    rm_id: int | None = None          # None: a shared token, each RM picks their name in the app
+    rm_id: int | None = None          # None: a shared RM token, each RM picks their name in the app
+    dc_id: int | None = None          # Data Collector ID (mutually exclusive with rm_id and employee_id)
+    employee_id: int | None = None    # Employee ID (mutually exclusive with rm_id and dc_id)
     label: str = ""
 
 
@@ -1283,7 +1285,8 @@ def upload_tokens():
 @app.post("/api/uploader/tokens")
 def new_upload_token(body: UploadTokenBody, actor=Depends(allow("admin"))):
     try:
-        return recordings.create_token(body.rm_id, body.label, actor.get("name") or actor.get("email"))
+        return recordings.create_token(rm_id=body.rm_id, dc_id=body.dc_id, employee_id=body.employee_id,
+                                      label=body.label, created_by=actor.get("name") or actor.get("email"))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -1768,7 +1771,7 @@ def mansi_recordings(
 
 
 @app.get("/api/recordings", dependencies=[Depends(allow("admin", "ops", "rm"))])
-def list_recordings(request: Request, status: str | None = None, rm_id: int | None = None, limit: int = 500, call_type: str | None = None):
+def list_recordings(request: Request, status: str | None = None, rm_id: int | None = None, limit: int = 500, call_type: str | None = None, mode: str | None = None, employee_id: int | None = None):
     u = request.state.user
     # Admin/Ops: can view all recordings, or filter to specific RM if requested
     # RM: can only view their own recordings (rm_id forced to their own)
@@ -1777,13 +1780,13 @@ def list_recordings(request: Request, status: str | None = None, rm_id: int | No
     # else: admin/ops see all if rm_id=None, or filtered if rm_id is specified
 
     # Log the API call for debugging data issues
-    log.info(f"API: /api/recordings - user={u.get('email')}, status={status}, rm_id={rm_id}, limit={limit}, call_type={call_type}")
+    log.info(f"API: /api/recordings - user={u.get('email')}, status={status}, rm_id={rm_id}, limit={limit}, call_type={call_type}, mode={mode}, employee_id={employee_id}")
 
     try:
         counts = recordings.summary_counts(rm_id)
         log.debug(f"  Counts: {counts}")
 
-        recs = recordings.list_recordings(status, rm_id, limit, call_type)
+        recs = recordings.list_recordings(status, rm_id, limit, call_type, mode, employee_id)
         log.info(f"  Returned {len(recs)} recordings (expected by counts: {sum(counts.values())})")
 
         if sum(counts.values()) > 0 and len(recs) == 0:
