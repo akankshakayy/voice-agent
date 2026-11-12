@@ -169,14 +169,14 @@ def validate_dc_consent(dc_id: int, consent_token: str) -> bool:
 
 
 def send_to_prachi_api(rec: dict) -> bool:
-    """Send DC recording to Prachi's API with new endpoint and authentication.
+    """Send RM and DC recordings to Prachi's API with new endpoint and authentication.
 
     NEW (Prachi corrected requirements):
     - Endpoint: https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings
     - Auth: X-Recording-Secret header (env var: PRACHI_RECORDING_SECRET)
     - Response: 202 Accepted with {"accepted": n}
     - Payload: id, dc_number, other_number, direction, started_at (ISO tz), duration, audio_url
-    - Filter: Only DC mode with consent_given=true
+    - Modes: RM and DC (DC requires consent_given=true)
 
     Returns True if success/fatal, False if retry.
     """
@@ -190,10 +190,10 @@ def send_to_prachi_api(rec: dict) -> bool:
         log.warning(f"PRACHI_RECORDING_SECRET not set; skipping Prachi sync for recording {rec['id']}")
         return True
 
-    # Only send DC recordings (per new Prachi requirement)
+    # Send RM and DC recordings (DC requires consent)
     mode = rec.get("mode", "rm")
-    if mode != "dc":
-        log.debug(f"Recording {rec['id']} mode={mode}; skipping Prachi (DC only)")
+    if mode not in ("rm", "dc"):
+        log.debug(f"Recording {rec['id']} mode={mode}; skipping Prachi (RM/DC only)")
         return True
 
     # Get DC number from database
@@ -1127,25 +1127,12 @@ def process_one(r: dict):
     _write_summary(r["id"])
     integrations.recording_processed(r["id"])
 
-    # Send to Prachi's API only for DC mode (new requirement: DC only)
-    if mode == "dc":
+    # Send to Prachi's API for both RM and DC modes
+    if mode in ("rm", "dc"):
         # Fetch updated recording for Prachi
         rec_updated = db.q("SELECT * FROM recordings WHERE id=?", (r["id"],), one=True)
         if not send_to_prachi_api(rec_updated):
-            log.warning(f"Failed to send DC recording {r['id']} to Prachi API; will retry on next run")
-
-    # RM mode: also queue AutoGMap upload if phone is in applicants
-    if mode == "rm" and r.get("other_number") and r.get("duration_sec"):
-        # Normalize phone number (last 10 digits)
-        phone = re.sub(r"\D", "", r["other_number"])[-10:] if r["other_number"] else ""
-        if phone:
-            queue_autogmap_upload(
-                r["id"],
-                r["file_path"],
-                phone,
-                "inbound" if r.get("direction") == "incoming" else "outbound",
-                int(r.get("duration_sec", 0))
-            )
+            log.warning(f"Failed to send {mode.upper()} recording {r['id']} to Prachi API; will retry on next run")
 
 
 def _write_summary(rec_id: int):
