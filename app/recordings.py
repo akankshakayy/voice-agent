@@ -408,11 +408,11 @@ def send_to_mansi_api(rec: dict) -> bool:
     import os
     import requests
 
-    mansi_url = os.environ.get("MANSI_API_URL")
-    mansi_key = os.environ.get("MANSI_API_KEY")
+    mansi_url = os.environ.get("AUTOGMAP_RECORDINGS_URL")
+    mansi_key = os.environ.get("AUTOGMAP_API_KEY")
 
     if not mansi_url or not mansi_key:
-        log.warning(f"MANSI_API_URL or MANSI_API_KEY not set; skipping Mansi sync for recording {rec['id']}")
+        log.warning(f"AUTOGMAP_RECORDINGS_URL or AUTOGMAP_API_KEY not set; skipping Mansi sync for recording {rec['id']}")
         return True
 
     payload = {
@@ -426,7 +426,7 @@ def send_to_mansi_api(rec: dict) -> bool:
 
     try:
         response = requests.post(
-            f"{mansi_url}/api/recordings",
+            mansi_url,
             json=payload,
             headers={"Authorization": f"Bearer {mansi_key}"},
             timeout=30
