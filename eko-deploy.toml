@@ -5,6 +5,12 @@ type = "dockerfile"
 port = 8000
 health = "/status"
 
-[[service.web.volumes]]
-name = "data"
-path = "/app/data"
+[[service.web.mounts]]
+target = "/app/data"
+source = "/home/akanksha/voice_agent/data"
+type = "bind"
+
+[[service.web.mounts]]
+target = "/backup"
+source = "/home/akanksha/voice_agent/data/backups"
+type = "bind"
