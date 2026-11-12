@@ -9,6 +9,24 @@
     <LinearLayout
         style="@style/HeaderBanner"
         android:orientation="vertical">
+        <FrameLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/bg_logo_chip"
+            android:paddingLeft="14dp"
+            android:paddingRight="14dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+            <ImageView
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:adjustViewBounds="true"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_eko_logo"
+                android:contentDescription="Eko"/>
+        </FrameLayout>
         <TextView
             style="@style/HeaderTitle"
             android:text="Sahayak" />
