@@ -20,7 +20,7 @@ EXPOSE 8000
 VOLUME ["/app/data", "/data"]
 
 # Startup script: restore database from mounted volume if available, then run app
-RUN echo '#!/bin/bash\nset -e\nif [ -f /data/eko_agent.db ]; then\n  cp /data/eko_agent.db /app/data/\nfi\nexec python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "*"' > /app/start.sh && \
+RUN echo '#!/bin/bash\nset -e\necho "Checking for database..."\nif [ -f /data/eko_agent.db ]; then\n  echo "Found database at /data/eko_agent.db"\n  cp /data/eko_agent.db /app/data/\nelif [ -f /home/akanksha/voice_agent/data/eko_agent.db ]; then\n  echo "Found database at /home/akanksha/voice_agent/data/eko_agent.db"\n  cp /home/akanksha/voice_agent/data/eko_agent.db /app/data/\nelse\n  echo "WARNING: No database file found!"\nfi\necho "Starting app..."\nexec python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "*"' > /app/start.sh && \
     chmod +x /app/start.sh
 
 CMD ["/app/start.sh"]
