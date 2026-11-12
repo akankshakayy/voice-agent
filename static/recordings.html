@@ -258,6 +258,7 @@ function setMode(mode) {
   // Show/hide filters based on mode
   $("fRm").hidden = mode !== 'rm';
   $("fEmployee").hidden = mode !== 'employee';
+  $("fCat").hidden = mode !== 'rm';  // Issue type filter only for RM recordings
 
   // Filter rows based on mode
   if (mode === 'dc') {
