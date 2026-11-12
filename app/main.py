@@ -15,8 +15,12 @@ from datetime import datetime
 from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
+import os as _os_for_dotenv
 
-load_dotenv()
+# Load environment variables from .env.local (takes precedence)
+load_dotenv('.env.local')
+# Also load from .env (fallback)
+load_dotenv('.env')
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response  # noqa: E402
