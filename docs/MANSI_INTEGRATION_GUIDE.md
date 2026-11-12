@@ -1,4 +1,4 @@
-# Employee Mode Integration Guide for Mansi
+# Mansi Integration Guide - Employee Mode
 
 **Date:** November 12, 2026  
 **Status:** Ready for Integration  
@@ -8,35 +8,52 @@
 
 ## Overview
 
-**Employee Mode recordings use PULL (on-demand) model only.**
+**Employee Mode recordings use both PUSH + PULL models:**
 
-- **Recording source:** All calls recorded by Employee (Kavya, future expansion)
-- **Storage:** Stored locally on our server + synced to database
-- **Access:** Mansi queries our server when she needs recordings
-- **No credentials needed:** Employee mode is available at public PULL endpoint
-- **No external push:** Recordings are not sent to Mansi's server automatically
+1. **PUSH Model** (Automatic)
+   - Employee recordings auto-sent to Mansi's endpoint when processed
+   - Requires: MANSI_API_URL, MANSI_API_KEY
 
----
-
-## PULL (On-Demand Query) - Employee Mode
-
-### How It Works (Kavya's Flow)
-1. Sahayak Uploader app is installed on Kavya's phone
-2. Kavya makes/receives calls with new leads
-3. Uploader automatically records all calls
-4. Recordings are stored locally + synced to our server
-5. When Mansi needs recordings, she sends a GET request
-6. Our server returns all recordings from that date range
-
-### Key Differences from RM/DC:
-- **No applicant numbers list** - All calls are recorded
-- **No filtering** - All recordings available
-- **No auto-push** - Mansi pulls on-demand
-- **No consent needed** - Internal employee calls
+2. **PULL Model** (On-Demand)
+   - Mansi can query our server when she needs recordings
+   - Endpoint: `GET https://indev.eko.in/rm-voice-agent/api/mansi/recordings`
+   - No authentication required
 
 ---
 
-## PULL (On-Demand Query) - General
+## Model 1: PUSH (Automatic Send)
+
+### How It Works
+1. Employee (Kavya) makes/receives calls
+2. Uploader records all calls automatically
+3. When recording processing completes, we send to Mansi's endpoint
+4. Mansi receives via POST webhook in real-time
+
+### Endpoint (Mansi's Side)
+```
+POST {MANSI_API_URL}/api/recordings
+```
+
+### Requirements
+- API URL: `MANSI_API_URL` (set in .env.local)
+- API Key: `MANSI_API_KEY` (set in .env.local)
+- Auth: Bearer token in Authorization header
+
+### Payload Sent
+```json
+{
+  "recording_id": 123,
+  "employee_id": 1,
+  "timestamp": "2026-11-12T10:30:00Z",
+  "other_number": "+91-98765-43210",
+  "duration_sec": 120,
+  "file_path": "/path/to/audio.wav"
+}
+```
+
+---
+
+## Model 2: PULL (On-Demand Query)
 
 ### How It Works
 Mansi queries our server when she needs recordings from specific numbers or date ranges.
