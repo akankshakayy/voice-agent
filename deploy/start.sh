@@ -2,7 +2,7 @@
 # Start Sahayak if it isn't answering. Safe to run any time: cron runs it at boot and every 5 minutes,
 # so Sahayak comes back after a reboot, a crash or a hang. No sudo needed. Output goes to sahayak.log.
 cd "$(dirname "$0")/.." || exit 1
-PORT="${SAHAYAK_PORT:-8010}"
+PORT="${SAHAYAK_PORT:-21004}"
 if curl -s -o /dev/null -m 10 "http://127.0.0.1:$PORT/login"; then
     exit 0
 fi
