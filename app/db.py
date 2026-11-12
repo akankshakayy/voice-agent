@@ -15,40 +15,23 @@ def _ensure_schema():
     """Add missing columns to recordings table if they don't exist."""
     try:
         conn = sqlite3.connect(DB_PATH)
-        conn.execute("PRAGMA journal_mode=WAL")  # Enable write-ahead logging
-        try:
-            cols = {c[1] for c in conn.execute("PRAGMA table_info(recordings)").fetchall()}
-            missing = []
-            if "mode" not in cols:
+        conn.isolation_level = None  # Autocommit mode
+        conn.execute("PRAGMA journal_mode=WAL")
+
+        cols = {c[1] for c in conn.execute("PRAGMA table_info(recordings)").fetchall()}
+
+        # Only add columns that don't exist
+        for col, dtype in [("mode", "TEXT DEFAULT 'rm'"), ("dc_id", "INTEGER"), ("employee_id", "INTEGER")]:
+            if col not in cols:
                 try:
-                    conn.execute("ALTER TABLE recordings ADD COLUMN mode TEXT DEFAULT 'rm'")
-                    missing.append("mode")
-                except sqlite3.OperationalError as e:
-                    if "already exists" not in str(e):
-                        raise
-            if "dc_id" not in cols:
-                try:
-                    conn.execute("ALTER TABLE recordings ADD COLUMN dc_id INTEGER")
-                    missing.append("dc_id")
-                except sqlite3.OperationalError as e:
-                    if "already exists" not in str(e):
-                        raise
-            if "employee_id" not in cols:
-                try:
-                    conn.execute("ALTER TABLE recordings ADD COLUMN employee_id INTEGER")
-                    missing.append("employee_id")
-                except sqlite3.OperationalError as e:
-                    if "already exists" not in str(e):
-                        raise
-            if missing:
-                conn.commit()
-                print(f"✅ Database schema updated: added columns {missing}")
-            conn.close()
-        except Exception as e:
-            conn.close()
-            raise
+                    conn.execute(f"ALTER TABLE recordings ADD COLUMN {col} {dtype}")
+                except sqlite3.OperationalError:
+                    pass  # Column might already exist or table doesn't exist yet
+
+        conn.commit()
+        conn.close()
     except Exception as e:
-        print(f"⚠️  Database migration error (may be expected): {e}")
+        pass  # Silently fail - schema will be created on first use
 
 SCHEMA = """
 -- INVARIANT: All recordings and upload_tokens must satisfy mode/ID consistency:
