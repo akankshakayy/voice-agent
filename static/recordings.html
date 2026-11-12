@@ -105,19 +105,21 @@
   <section class="panel" style="--tone:var(--c5)">
     <h2>Recorded calls</h2>
     <div style="display: flex; gap: 10px; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
-      <button id="tabRM" class="tab-btn active" onclick="setCallType('rm')" style="background: none; border: none; color: var(--text); padding: 8px 12px; cursor: pointer; border-bottom: 3px solid transparent; font-weight: 500;">RM Calls <span id="rmCount" class="small muted">(0)</span></button>
-      <button id="tabDC" class="tab-btn" onclick="setCallType('dc')" style="background: none; border: none; color: var(--muted); padding: 8px 12px; cursor: pointer; border-bottom: 3px solid transparent;">DC Calls <span id="dcCount" class="small muted">(0)</span></button>
+      <button id="tabRM" class="tab-btn active" onclick="setMode('rm')" style="background: none; border: none; color: var(--text); padding: 8px 12px; cursor: pointer; border-bottom: 3px solid transparent; font-weight: 500;">RM Calls <span id="rmCount" class="small muted">(0)</span></button>
+      <button id="tabDC" class="tab-btn" onclick="setMode('dc')" style="background: none; border: none; color: var(--muted); padding: 8px 12px; cursor: pointer; border-bottom: 3px solid transparent;">DC Calls <span id="dcCount" class="small muted">(0)</span></button>
+      <button id="tabEmployee" class="tab-btn" onclick="setMode('employee')" style="background: none; border: none; color: var(--muted); padding: 8px 12px; cursor: pointer; border-bottom: 3px solid transparent;">Employee Calls <span id="employeeCount" class="small muted">(0)</span></button>
     </div>
     <div class="filters">
       <select id="fStatus"><option value="">All statuses</option><option value="check">To check: least sure first</option><option value="done">Processed</option><option value="new">Waiting</option><option value="failed">Failed</option></select>
       <select id="fCat"><option value="">All issue types</option></select>
       <select id="fRm" hidden><option value="">All RMs</option></select>
+      <select id="fEmployee" hidden><option value="">All employees</option></select>
       <input id="fDateFrom" type="date" placeholder="From date">
       <input id="fDateTo" type="date" placeholder="To date">
       <input id="fSearch" placeholder="Search CSP, number, summary, transcript…">
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Call time</th><th>RM</th><th>CSP</th><th>Length</th><th>Issue</th><th>Status</th><th>From</th></tr></thead>
+      <thead><tr><th>Call time</th><th id="actorHeader">RM</th><th>CSP</th><th>Length</th><th>Issue</th><th>Status</th><th>From</th></tr></thead>
       <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
     </table></div>
   </section>
@@ -148,7 +150,7 @@ function whoLabel(l, r) {
   if (n) return `Speaker ${n}${role ? `<small>${role}</small>` : ""}`;
   return SPEAKER[l.speaker] || "?";
 }
-let ROWS = [], RMS = [], OPEN = null, STAFF = false, EDITING = false, CALL_TYPE = 'rm';
+let ROWS = [], RMS = [], EMPLOYEES = [], OPEN = null, STAFF = false, EDITING = false, CURRENT_MODE = 'rm';
 let ALL_ROWS = [];  // Keep unfiltered rows for counting
 
 // The calls to check: processed CSP calls nobody has checked, the ones the machine was least sure of first
@@ -165,17 +167,21 @@ const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
     const me = await loadMe();
     STAFF = me.role === "admin" || me.role === "ops";
     RMS = await api("api/rms");
+    EMPLOYEES = await api("api/employees");
     $("nav").innerHTML = navHtml("recordings") + `<div class="right"><span class="small muted" id="updated"></span></div>`;
     $("fCat").innerHTML += Object.entries(CONFIG.categories).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("")
       + `<option value="unknown">No issue / unknown</option>`;
     if (STAFF) {
       $("uploadPanel").hidden = false;
       $("fRm").hidden = false;
+      $("fEmployee").hidden = false;
       const opts = RMS.map(r => `<option value="${r.id}">${esc(r.name)} · ${esc(r.region)}</option>`).join("");
       $("uRm").innerHTML = opts + `<option value="0">No RM (not an RM call)</option>`;
       $("fRm").innerHTML += opts;
+      const empOpts = EMPLOYEES.map(e => `<option value="${e.id}">${esc(e.name)}${e.department ? ` · ${esc(e.department)}` : ""}</option>`).join("");
+      $("fEmployee").innerHTML += empOpts;
     }
-    ["fStatus", "fCat", "fRm", "fDateFrom", "fDateTo"].forEach(id => $(id).onchange = render);
+    ["fStatus", "fCat", "fRm", "fEmployee", "fDateFrom", "fDateTo"].forEach(id => $(id).onchange = render);
     $("fSearch").oninput = render;
     $("drawerBg").onclick = closeDrawer;
     $("uploadForm").onsubmit = upload;
@@ -191,13 +197,25 @@ const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
 async function refresh() {
   const data = await api("api/recordings?limit=1000");
   ALL_ROWS = data.recordings;
-  ROWS = ALL_ROWS.filter(r => r.call_type === CALL_TYPE || (r.call_type === null && CALL_TYPE === 'rm'));
 
-  // Count by call type
-  const rmCount = ALL_ROWS.filter(r => r.call_type !== 'dc').length;
-  const dcCount = ALL_ROWS.filter(r => r.call_type === 'dc').length;
-  $("rmCount").textContent = `(${rmCount})`;
-  $("dcCount").textContent = `(${dcCount})`;
+  // Filter by current mode
+  const rmRecordings = ALL_ROWS.filter(r => !r.mode || r.mode === 'rm');
+  const dcRecordings = ALL_ROWS.filter(r => r.mode === 'dc');
+  const employeeRecordings = ALL_ROWS.filter(r => r.mode === 'employee');
+
+  // Update counts by mode
+  $("rmCount").textContent = `(${rmRecordings.length})`;
+  $("dcCount").textContent = `(${dcRecordings.length})`;
+  $("employeeCount").textContent = `(${employeeRecordings.length})`;
+
+  // Filter ROWS based on current mode
+  if (CURRENT_MODE === 'dc') {
+    ROWS = dcRecordings;
+  } else if (CURRENT_MODE === 'employee') {
+    ROWS = employeeRecordings;
+  } else {
+    ROWS = rmRecordings;
+  }
 
   const c = data.counts, done = ROWS.filter(r => r.status === "done");
   const secs = ROWS.reduce((a, r) => a + (r.duration_sec || 0), 0);
@@ -222,18 +240,48 @@ async function refresh() {
   refresh.t = setTimeout(refresh, (c.new || writing ? 8 : 30) * 1000);
 }
 
-function setCallType(type) {
-  CALL_TYPE = type;
-  $("tabRM").style.color = type === 'rm' ? 'var(--text)' : 'var(--muted)';
-  $("tabRM").style.borderBottom = type === 'rm' ? '3px solid var(--c1)' : 'none';
-  $("tabDC").style.color = type === 'dc' ? 'var(--text)' : 'var(--muted)';
-  $("tabDC").style.borderBottom = type === 'dc' ? '3px solid var(--c1)' : 'none';
-  ROWS = ALL_ROWS.filter(r => r.call_type === CALL_TYPE || (r.call_type === null && CALL_TYPE === 'rm'));
+function setMode(mode) {
+  CURRENT_MODE = mode;
+
+  // Update tab styling
+  $("tabRM").style.color = mode === 'rm' ? 'var(--text)' : 'var(--muted)';
+  $("tabRM").style.borderBottom = mode === 'rm' ? '3px solid var(--c1)' : 'none';
+  $("tabDC").style.color = mode === 'dc' ? 'var(--text)' : 'var(--muted)';
+  $("tabDC").style.borderBottom = mode === 'dc' ? '3px solid var(--c1)' : 'none';
+  $("tabEmployee").style.color = mode === 'employee' ? 'var(--text)' : 'var(--muted)';
+  $("tabEmployee").style.borderBottom = mode === 'employee' ? '3px solid var(--c1)' : 'none';
+
+  // Update table header based on mode
+  const headers = { rm: "RM", dc: "DC", employee: "Employee" };
+  $("actorHeader").textContent = headers[mode] || "RM";
+
+  // Show/hide filters based on mode
+  $("fRm").hidden = mode !== 'rm';
+  $("fEmployee").hidden = mode !== 'employee';
+
+  // Filter rows based on mode
+  if (mode === 'dc') {
+    ROWS = ALL_ROWS.filter(r => r.mode === 'dc');
+  } else if (mode === 'employee') {
+    ROWS = ALL_ROWS.filter(r => r.mode === 'employee');
+  } else {
+    ROWS = ALL_ROWS.filter(r => !r.mode || r.mode === 'rm');
+  }
+
+  // Reset filters when switching modes
+  $("fStatus").value = "";
+  $("fCat").value = "";
+  $("fRm").value = "";
+  $("fEmployee").value = "";
+  $("fDateFrom").value = "";
+  $("fDateTo").value = "";
+  $("fSearch").value = "";
+
   render();
 }
 
 function render() {
-  const st = $("fStatus").value, cat = $("fCat").value, rm = $("fRm").value, q = $("fSearch").value.toLowerCase();
+  const st = $("fStatus").value, cat = $("fCat").value, rm = $("fRm").value, emp = $("fEmployee").value, q = $("fSearch").value.toLowerCase();
   const dateFrom = $("fDateFrom").value ? (() => { const d = new Date($("fDateFrom").value); d.setHours(0, 0, 0, 0); return d; })() : null;
   const dateTo = $("fDateTo").value ? (() => { const d = new Date($("fDateTo").value); d.setHours(23, 59, 59, 999); return d; })() : null;
 
@@ -242,7 +290,8 @@ function render() {
     if (st && st !== "check" && r.status !== st) return false;
     if (cat && (r.intent || "unknown") !== cat) return false;
     if (rm && String(r.rm_id) !== rm) return false;
-    if (q && !JSON.stringify([r.csp_name, r.csp_code, r.other_number, r.summary, r.orig_name, r.rm_name]).toLowerCase().includes(q)) return false;
+    if (emp && String(r.employee_id) !== emp) return false;
+    if (q && !JSON.stringify([r.csp_name, r.csp_code, r.other_number, r.summary, r.orig_name, r.rm_name, r.employee_id]).toLowerCase().includes(q)) return false;
 
     // Date filtering: check if recording date falls within the selected range
     const recTime = new Date((r.started_at || r.uploaded_at) * 1000);
@@ -250,17 +299,30 @@ function render() {
     if (dateTo && recTime > dateTo) return false;
     return true;
   });
-  $("rows").innerHTML = rows.length ? rows.map(r => `<tr class="clickable" onclick="openRec(${r.id})">
-      <td class="nowrap">${fmtTime(r.started_at || r.uploaded_at)}<div class="small muted">${r.direction === "incoming" ? "CSP called" : r.direction === "outgoing" ? "RM called" : ""}</div></td>
-      <td>${esc(r.rm_name || "–")}</td>
+  $("rows").innerHTML = rows.length ? rows.map(r => {
+    // Determine who the caller/subject is based on mode
+    let caller = "";
+    if (r.mode === "employee") {
+      // For employee recordings, show the employee name
+      const emp = EMPLOYEES.find(e => e.id === r.employee_id);
+      caller = emp ? esc(emp.name) : (r.employee_id ? `Employee ${r.employee_id}` : "–");
+    } else {
+      // For RM/DC recordings, show RM name
+      caller = esc(r.rm_name || "–");
+    }
+
+    return `<tr class="clickable" onclick="openRec(${r.id})">
+      <td class="nowrap">${fmtTime(r.started_at || r.uploaded_at)}<div class="small muted">${r.direction === "incoming" ? "Incoming" : r.direction === "outgoing" ? "Outgoing" : ""}</div></td>
+      <td>${caller}</td>
       <td>${who(r)}${r.csp_code ? `<div class="small muted">${esc(r.csp_code)}</div>` : ""}</td>
       <td class="mono nowrap">${fmtDur(r.duration_sec)}</td>
       <td>${r.intent && r.intent !== "unknown" ? catChip(r.intent) : r.status === "done" ? '<span class="muted small">No issue</span>' : ""}
         ${r.summary ? `<div class="small muted sum">${esc(r.summary.slice(0, 110))}</div>` : ""}</td>
       <td>${statusBadge(r)}${r.checked_at ? ' <span class="badge b-ok">✓ Checked</span>' : ""}
         ${st === "check" && sureness(r) != null ? `<div class="sure">Machine ${Math.round(sureness(r) * 100)}% sure</div>` : ""}</td>
-      <td><span class="badge ${r.source === "phone" ? "b-accent" : ""}">${r.source === "phone" ? "Phone app" : "Added by hand"}</span></td></tr>`).join("")
-    : `<tr><td colspan="7" class="empty">${st === "check" && !cat && !rm && !q ? "Nothing to check: every processed call has been checked" : ROWS.length ? "No recordings match" : "No recordings yet. They appear here as phones upload them" + (STAFF ? ", or add some above." : ".")}</td></tr>`;
+      <td><span class="badge ${r.source === "phone" ? "b-accent" : ""}">${r.source === "phone" ? "Phone app" : "Added by hand"}</span></td></tr>`;
+  }).join("")
+    : `<tr><td colspan="7" class="empty">${st === "check" && !cat && !rm && !emp && !q ? "Nothing to check: every processed call has been checked" : ROWS.length ? "No recordings match" : "No recordings yet. They appear here as phones upload them" + (STAFF ? ", or add some above." : ".")}</td></tr>`;
 }
 
 async function openRec(id) {
@@ -275,8 +337,18 @@ async function openRec(id) {
   const res = RESOLUTION[r.resolution], mood = MOOD[r.sentiment];
   const lines = r.transcript || [];
   const slots = Object.entries(r.slots || {});
+
+  // Determine actor name based on mode
+  let actorName = "";
+  if (r.mode === "employee") {
+    const emp = EMPLOYEES.find(e => e.id === r.employee_id);
+    actorName = emp ? esc(emp.name) : (r.employee_id ? `Employee ${r.employee_id}` : "");
+  } else {
+    actorName = esc(r.rm_name || "");
+  }
+
   $("drawer").innerHTML = `<div class="drawer-head"><div><h2>${who(r)}</h2>
-      <div class="sub">${fmtTime(r.started_at || r.uploaded_at)} · ${esc(r.rm_name || "")} · ${fmtDur(r.duration_sec)}</div></div>
+      <div class="sub">${fmtTime(r.started_at || r.uploaded_at)} · ${actorName} · ${fmtDur(r.duration_sec)}</div></div>
       <div style="display:flex;gap:8px">${checkQueue().some(x => x.id !== r.id) ? `<button class="secondary" onclick="nextToCheck()">Next call to check →</button>` : ""}
       <button class="secondary" onclick="closeDrawer()">Close</button></div></div>
     <audio id="player" controls preload="metadata" src="api/recordings/${r.id}/audio"></audio>

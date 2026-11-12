@@ -1268,13 +1268,13 @@ def processing_loop(stop: threading.Event):
 LIST_COLS = """r.id, r.rm_id, m.name AS rm_name, r.csp_id, c.name AS csp_name, c.csp_code, r.other_number, r.started_at,
                r.duration_sec, r.direction, r.uploaded_at, r.status, r.error, r.attempts, r.is_csp_call, r.language,
                r.intent, r.sentiment, r.resolution, r.summary, r.orig_name, r.intent_confidence, r.stt_confidence,
-               r.checked_at, r.issue_checked_at, r.stt_words, r.call_type,
+               r.checked_at, r.issue_checked_at, r.stt_words, r.call_type, r.mode, r.dc_id, r.employee_id,
                CASE WHEN r.transcript_json IS NOT NULL AND r.transcript_json NOT IN ('', '[]') THEN 1 ELSE 0 END AS has_transcript,
                CASE WHEN r.stt_words > 0 THEN ROUND(1.0 * r.stt_errors / r.stt_words, 4) END AS stt_wer,
                CASE WHEN r.token_id IS NULL THEN 'manual' ELSE 'phone' END AS source"""
 
 
-def list_recordings(status: str | None = None, rm_id: int | None = None, limit: int = 200, call_type: str | None = None) -> list[dict]:
+def list_recordings(status: str | None = None, rm_id: int | None = None, limit: int = 200, call_type: str | None = None, mode: str | None = None, employee_id: int | None = None) -> list[dict]:
     where, args = [], []
     if status:
         where.append("r.status=?")
@@ -1285,12 +1285,18 @@ def list_recordings(status: str | None = None, rm_id: int | None = None, limit: 
     if call_type:
         where.append("r.call_type=?")
         args.append(call_type)
+    if mode:
+        where.append("r.mode=?")
+        args.append(mode)
+    if employee_id:
+        where.append("r.employee_id=?")
+        args.append(employee_id)
     sql = (f"SELECT {LIST_COLS} FROM recordings r LEFT JOIN rms m ON m.id=r.rm_id LEFT JOIN csps c ON c.id=r.csp_id"
            + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY r.started_at DESC, r.id DESC LIMIT ?")
 
     # Debug logging
     limit_val = max(1, min(limit, 1000))
-    log.debug(f"list_recordings: status={status}, rm_id={rm_id}, call_type={call_type}, limit={limit_val}")
+    log.debug(f"list_recordings: status={status}, rm_id={rm_id}, call_type={call_type}, mode={mode}, employee_id={employee_id}, limit={limit_val}")
     log.debug(f"  SQL: {sql}")
     log.debug(f"  Args: {args + [limit_val]}")
 
