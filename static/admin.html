@@ -531,7 +531,7 @@
         <div class="sidebar">
             <div class="sidebar-logo">🔧 Eko Admin</div>
             <div class="sidebar-nav">
-                <div class="nav-item active" data-page="dcs">📍 Data Collectors</div>
+                <div class="nav-item active" data-page="dcs">📍 District Coordinators</div>
                 <div class="nav-item" data-page="employees">👥 Employees</div>
                 <div class="nav-item" data-page="allowed-numbers">📞 Allowed Numbers</div>
                 <div class="nav-item" data-page="applicant-numbers">📱 Applicant Numbers</div>
@@ -1184,7 +1184,7 @@
             state.editingId = null;
 
             if (state.currentPage === 'dcs') {
-                document.getElementById('modalTitle').textContent = 'Add Data Collector';
+                document.getElementById('modalTitle').textContent = 'Add District Coordinator';
                 document.getElementById('submitBtn').textContent = 'Add';
                 document.getElementById('formFields').innerHTML = `
                     <div class="form-group">
@@ -1244,7 +1244,7 @@
                 document.getElementById('submitBtn').textContent = 'Add';
                 document.getElementById('formFields').innerHTML = `
                     <div class="form-group">
-                        <label>Data Collector *</label>
+                        <label>District Coordinator *</label>
                         <select name="dc_id" required>
                             <option value="">Select DC...</option>
                             ${state.dcs.map(dc => `<option value="${dc.id}">${dc.name}</option>`).join('')}
@@ -1271,7 +1271,7 @@
             state.currentAction = 'edit';
             state.editingId = id;
 
-            document.getElementById('modalTitle').textContent = `Edit Data Collector`;
+            document.getElementById('modalTitle').textContent = `Edit District Coordinator`;
             document.getElementById('submitBtn').textContent = 'Save Changes';
             document.getElementById('formFields').innerHTML = `
                 <div class="form-group">

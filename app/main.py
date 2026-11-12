@@ -1301,7 +1301,7 @@ def revoke_upload_token(token_id: int):
 # ------------------------------------------------------------------ DC (Data Collector) Management
 @app.get("/api/dcs", dependencies=[Depends(allow("admin"))])
 def list_dcs():
-    """List all Data Collectors."""
+    """List all District Coordinators."""
     return db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
 
 
@@ -1310,11 +1310,12 @@ class DCBody(BaseModel):
     phone: str | None = None
     email: str | None = None
     region: str | None = None
+    active: int = 1
 
 
 @app.post("/api/dcs", dependencies=[Depends(allow("admin"))])
 def create_dc(body: DCBody, actor=Depends(allow("admin"))):
-    """Create a new Data Collector."""
+    """Create a new District Coordinator."""
     try:
         dc_id = db.x("""INSERT INTO dcs(name, phone, email, region, created_by, created_at, active)
                         VALUES(?, ?, ?, ?, ?, ?, 1)""",
