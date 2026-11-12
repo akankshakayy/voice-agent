@@ -331,7 +331,7 @@ CREATE INDEX IF NOT EXISTS idx_prachi_sync_history_type ON prachi_sync_history(s
 _conn = None
 
 
-def conn() -> sqlite3.Connection:
+def conn(retry=True) -> sqlite3.Connection:
     global _conn
     if _conn is None:
         os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
@@ -340,7 +340,13 @@ def conn() -> sqlite3.Connection:
         _conn.execute("PRAGMA journal_mode=WAL")
         _conn.execute("PRAGMA synchronous=FULL")
         _conn.execute("PRAGMA wal_autocheckpoint=1000")
-        _conn.executescript(SCHEMA)
+        try:
+            _conn.executescript(SCHEMA)
+        except sqlite3.OperationalError as e:
+            if "mode" in str(e) or "column" in str(e):
+                pass  # Schema issue - columns may not exist yet, will be added below
+            else:
+                raise
         # Migrations for databases created by older versions
         if "lang" not in {r[1] for r in _conn.execute("PRAGMA table_info(calls)")}:
             _conn.execute("ALTER TABLE calls ADD COLUMN lang TEXT")  # 'ask' | 'hi' | 'en'
@@ -370,6 +376,14 @@ def conn() -> sqlite3.Connection:
             # Simulated calls send no webhook events. Every call so far was a demo or a console test
             _conn.execute("ALTER TABLE calls ADD COLUMN simulated INTEGER DEFAULT 0")
             _conn.execute("UPDATE calls SET simulated=1")
+        # Phase 4+ migrations: mode, dc_id, employee_id for mode-aware recordings
+        for col, dtype in [("mode", "TEXT DEFAULT 'rm'"), ("dc_id", "INTEGER"), ("employee_id", "INTEGER")]:
+            if col not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
+                try:
+                    _conn.execute(f"ALTER TABLE recordings ADD COLUMN {col} {dtype}")
+                    _conn.commit()
+                except sqlite3.OperationalError:
+                    pass
             _conn.commit()
         if "role" not in {r[1] for r in _conn.execute("PRAGMA table_info(users)")}:
             # Accounts made before roles existed: the first becomes admin, RM-linked ones RMs, the rest ops
