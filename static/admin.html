@@ -542,7 +542,7 @@
         <div class="main-content">
             <!-- Header -->
             <div class="header">
-                <div class="header-title" id="pageTitle">Data Collectors</div>
+                <div class="header-title" id="pageTitle">District Coordinators</div>
                 <div class="header-actions">
                     <button class="btn-primary" id="addBtn" onclick="openModal()">+ Add New</button>
                 </div>
@@ -561,7 +561,7 @@
                     <div class="table-container" id="dcsTableContainer">
                         <div class="loading">
                             <div class="spinner"></div>
-                            Loading Data Collectors...
+                            Loading District Coordinators...
                         </div>
                     </div>
                     <div class="pagination" id="dcsPagination"></div>
@@ -632,7 +632,7 @@
     <!-- Modal -->
     <div class="modal" id="formModal">
         <div class="modal-content">
-            <div class="modal-header" id="modalTitle">Add Data Collector</div>
+            <div class="modal-header" id="modalTitle">Add District Coordinator</div>
             <form id="dataForm" onsubmit="handleSubmit(event)">
                 <div id="formFields"></div>
                 <div class="modal-footer">
@@ -827,7 +827,7 @@
 
             // Update header
             const titles = {
-                dcs: 'Data Collectors',
+                dcs: 'District Coordinators',
                 employees: 'Employees',
                 'allowed-numbers': 'Allowed Numbers',
                 'applicant-numbers': 'Applicant Numbers'
@@ -930,7 +930,7 @@
             const page = filtered.slice(start, end);
 
             if (filtered.length === 0) {
-                document.getElementById('dcsTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No Data Collectors found</p></div>';
+                document.getElementById('dcsTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No District Coordinators found</p></div>';
                 document.getElementById('dcsPagination').innerHTML = '';
                 return;
             }
