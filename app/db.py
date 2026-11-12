@@ -11,6 +11,27 @@ DB_PATH = os.environ.get("EKO_DB_PATH") or os.path.join(
     os.environ.get("DATA_DIR") or os.path.join(os.path.dirname(__file__), "..", "data"), "eko_agent.db")
 _lock = threading.RLock()
 
+def _ensure_schema():
+    """Add missing columns to recordings table if they don't exist."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cols = {c[1] for c in conn.execute("PRAGMA table_info(recordings)").fetchall()}
+        missing = []
+        if "mode" not in cols:
+            conn.execute("ALTER TABLE recordings ADD COLUMN mode TEXT DEFAULT 'rm'")
+            missing.append("mode")
+        if "dc_id" not in cols:
+            conn.execute("ALTER TABLE recordings ADD COLUMN dc_id INTEGER")
+            missing.append("dc_id")
+        if "employee_id" not in cols:
+            conn.execute("ALTER TABLE recordings ADD COLUMN employee_id INTEGER")
+            missing.append("employee_id")
+        if missing:
+            conn.commit()
+            print(f"✅ Database schema updated: added columns {missing}")
+    finally:
+        conn.close()
+
 SCHEMA = """
 -- INVARIANT: All recordings and upload_tokens must satisfy mode/ID consistency:
 --   mode='rm' => rm_id IS NOT NULL, dc_id IS NULL, employee_id IS NULL
@@ -885,3 +906,10 @@ def import_from_json(json_str: str) -> list[dict]:
         return data
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON: {str(e)}")
+
+
+# Automatically ensure schema is up-to-date when module is imported
+try:
+    _ensure_schema()
+except Exception as e:
+    print(f"⚠️  Warning: Could not ensure database schema: {e}")
