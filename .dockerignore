@@ -1,0 +1,40 @@
+# Virtual environment - will be installed fresh in container
+.venv/
+venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.env.local
+.env.backup
+
+# Node/npm (for uploader)
+node_modules/
+npm-debug.log
+
+# Android build artifacts
+uploader/app/build/
+uploader/.gradle/
+
+# Logs and temp files
+*.log
+.claude/
+.pytest_cache/
