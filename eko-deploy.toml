@@ -5,5 +5,5 @@ type = "dockerfile"
 port = 8000
 health = "/status"
 volumes = [
-  { name = "data", path = "/app/data" }
+  { name = "data", path = "/app/data", host_path = "/home/akanksha/voice_agent/data" }
 ]
