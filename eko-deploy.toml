@@ -1,10 +1,7 @@
-[build]
-type = "dockerfile"
-
-[service.web]
+[services.web]
 port = 8000
 health = "/status"
 
-[[service.web.volumes]]
+[[services.web.volumes]]
 name = "data"
 path = "/app/data"
