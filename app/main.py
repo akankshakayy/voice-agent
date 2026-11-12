@@ -544,7 +544,7 @@ def harness_page():
 
 @app.get("/admin", dependencies=[Depends(allow("admin"))])
 def admin_page():
-    """Admin panel: Manage Data Collectors, Employees, and Allowed Numbers."""
+    """Admin panel: Manage District Coordinators, Employees, and Allowed Numbers."""
     return FileResponse(os.path.join(STATIC, "admin.html"))
 
 
@@ -557,7 +557,7 @@ def monitor_page():
 # ------------------------------------------------------------------ bulk load
 @app.post("/api/bulk-load/dcs", dependencies=[Depends(allow("admin"))])
 async def bulk_load_dcs_endpoint(file: UploadFile = File(...), actor=Depends(allow("admin"))):
-    """Bulk load Data Collectors from Excel file."""
+    """Bulk load District Coordinators from Excel file."""
     try:
         # Validate file type
         if not file.filename.endswith(('.xlsx', '.xls')):
@@ -1272,7 +1272,7 @@ def uploader_upload(audio: UploadFile = File(...), started_at: int | None = Form
 
 class UploadTokenBody(BaseModel):
     rm_id: int | None = None          # None: a shared RM token, each RM picks their name in the app
-    dc_id: int | None = None          # Data Collector ID (mutually exclusive with rm_id and employee_id)
+    dc_id: int | None = None          # District Coordinator ID (mutually exclusive with rm_id and employee_id)
     employee_id: int | None = None    # Employee ID (mutually exclusive with rm_id and dc_id)
     label: str = ""
 
@@ -1298,7 +1298,7 @@ def revoke_upload_token(token_id: int):
     return {"ok": True}
 
 
-# ------------------------------------------------------------------ DC (Data Collector) Management
+# ------------------------------------------------------------------ DC (District Coordinator) Management
 @app.get("/api/dcs", dependencies=[Depends(allow("admin"))])
 def list_dcs():
     """List all District Coordinators."""
@@ -1327,7 +1327,7 @@ def create_dc(body: DCBody, actor=Depends(allow("admin"))):
 
 @app.patch("/api/dcs/{dc_id}", dependencies=[Depends(allow("admin"))])
 def update_dc(dc_id: int, body: DCBody):
-    """Update a Data Collector."""
+    """Update a District Coordinator."""
     fields = {k: v for k, v in body.dict().items() if v is not None}
     if not fields:
         return {"ok": True}

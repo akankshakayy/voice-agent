@@ -223,7 +223,7 @@ def validate_employee_row(row: Dict, existing_phones: set) -> Tuple[bool, str, D
 
 def bulk_load_dcs(file_content: bytes, created_by: str) -> Dict:
     """
-    Bulk load Data Collectors from Excel file.
+    Bulk load District Coordinators from Excel file.
     Returns: results dict with success/error counts
     """
     result = BulkLoadResult()

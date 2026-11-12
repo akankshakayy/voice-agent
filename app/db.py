@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS auth_tokens (      -- one-time links sent by email: p
 CREATE TABLE IF NOT EXISTS auth_events (      -- sign-ins, failures, resets, role changes (also drives the lockout)
     id INTEGER PRIMARY KEY, ts REAL, user_id INTEGER, email TEXT, event TEXT, ip TEXT, detail TEXT
 );
-CREATE TABLE IF NOT EXISTS dcs (              -- Data Collectors (for DC mode uploader)
+CREATE TABLE IF NOT EXISTS dcs (              -- District Coordinators (for DC mode uploader)
     id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT UNIQUE, email TEXT UNIQUE, region TEXT,
     created_by TEXT, created_at REAL, active INTEGER DEFAULT 1, updated_at REAL
 );
