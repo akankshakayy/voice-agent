@@ -847,7 +847,7 @@
         // API Calls
         async function loadDCs() {
             try {
-                const response = await fetch(`${API_BASE}/api/dcs`);
+                const response = await fetch(`${API_BASE}/api/dcs`, { credentials: "include" });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 state.dcs = await response.json();
                 renderDCsTable();
@@ -859,7 +859,7 @@
 
         async function loadEmployees() {
             try {
-                const response = await fetch(`${API_BASE}/api/employees`);
+                const response = await fetch(`${API_BASE}/api/employees`, { credentials: "include" });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 state.employees = await response.json();
                 renderEmployeesTable();
@@ -871,7 +871,7 @@
 
         async function loadAllowedNumbers() {
             try {
-                const response = await fetch(`${API_BASE}/api/allowed-numbers`);
+                const response = await fetch(`${API_BASE}/api/allowed-numbers`, { credentials: "include" });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 state.allowedNumbers = await response.json();
                 renderAllowedNumbersTable();
@@ -891,7 +891,7 @@
                 const search = state.applicantsSearch || '';
                 const page = state.applicantsPage;
 
-                const response = await fetch(`${API_BASE}/api/applicant-numbers?search=${encodeURIComponent(search)}&status=${status}&page=${page}&per_page=50`);
+                const response = await fetch(`${API_BASE}/api/applicant-numbers?search=${encodeURIComponent(search)}&status=${status}&page=${page}&per_page=50`, { credentials: "include" });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
@@ -905,7 +905,7 @@
 
         async function refreshApplicantStatus() {
             try {
-                const response = await fetch(`${API_BASE}/api/applicant-numbers/status`);
+                const response = await fetch(`${API_BASE}/api/applicant-numbers/status`, { credentials: "include" });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 state.applicantStatus = await response.json();
 
@@ -1384,6 +1384,7 @@
                 const response = await fetch(url, {
                     method,
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify(data)
                 });
 
@@ -1433,7 +1434,8 @@
 
             try {
                 const response = await fetch(`${API_BASE}${endpoint}/${id}`, {
-                    method: 'DELETE'
+                    method: 'DELETE',
+                    credentials: 'include'
                 });
 
                 if (!response.ok) {
@@ -1507,6 +1509,7 @@
             try {
                 const response = await fetch(`${API_BASE}/api/bulk-load/applicant-numbers`, {
                     method: 'POST',
+                    credentials: 'include',
                     body: formData
                 });
 
@@ -1582,6 +1585,7 @@
                 const response = await fetch(`${API_BASE}/api/applicant-numbers/${state.editingApplicantId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify(data)
                 });
 

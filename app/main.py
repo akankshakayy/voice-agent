@@ -94,7 +94,7 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
                 "/api/recordings/cleanup"}
-PUBLIC_PREFIXES = ("/static/", "/api/dcs", "/api/allowed-numbers", "/api/applicant-numbers", "/api/bulk-load")  # Dev: admin APIs without auth
+PUBLIC_PREFIXES = ("/static/",)  # All admin APIs require auth via @allow("admin") decorator
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
 PAGE_ROLES = {"/": ("admin", "ops", "rm"), "/call": STAFF, "/ops": STAFF, "/harness": STAFF, "/rm": ("admin", "ops", "rm"),
