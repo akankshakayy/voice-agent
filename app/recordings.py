@@ -403,55 +403,6 @@ def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: st
         db.update("recordings", rec_id, autogmap_status="failed", autogmap_error=str(e)[:500])
 
 
-def send_to_mansi_api(rec: dict) -> bool:
-    """Send Employee recording (no transcript) to Mansi's API. Returns True if success/fatal, False if retry."""
-    import os
-    import requests
-
-    mansi_url = os.environ.get("MANSI_API_URL")
-    mansi_key = os.environ.get("MANSI_API_KEY")
-
-    if not mansi_url or not mansi_key:
-        log.warning(f"MANSI_API_URL or MANSI_API_KEY not set; skipping Mansi sync for recording {rec['id']}")
-        return True
-
-    payload = {
-        "recording_id": rec["id"],
-        "employee_id": rec.get("employee_id"),
-        "timestamp": rec.get("uploaded_at"),
-        "other_number": rec.get("other_number"),
-        "duration_sec": rec.get("duration_sec"),
-        "file_path": rec.get("file_path")
-    }
-
-    try:
-        response = requests.post(
-            f"{mansi_url}/api/recordings",
-            json=payload,
-            headers={"Authorization": f"Bearer {mansi_key}"},
-            timeout=30
-        )
-        if response.status_code == 200:
-            result = response.json()
-            db.update("recordings", rec["id"],
-                     mansi_api_sent_at=time.time(),
-                     mansi_request_id=result.get("request_id"))
-            log.info(f"Recording {rec['id']} sent to Mansi API (req_id={result.get('request_id')})")
-            return True
-        elif response.status_code >= 500:
-            log.warning(f"Mansi API error {response.status_code} for recording {rec['id']}; will retry")
-            return False
-        else:
-            log.error(f"Mansi API rejected recording {rec['id']}: {response.status_code}")
-            return True
-    except requests.Timeout:
-        log.warning(f"Mansi API timeout for recording {rec['id']}; will retry")
-        return False
-    except Exception as e:
-        log.error(f"Failed to send recording {rec['id']} to Mansi API: {e}")
-        return False
-
-
 # ---------------------------------------------------------------- receiving files
 def save_upload(device: dict, data: bytes, filename: str, started_at_ms: int | None = None,
                 duration_sec: float | None = None, direction: str = "unknown", other_number: str = "",
@@ -1055,15 +1006,11 @@ def process_one(r: dict):
     path = os.path.join(storage_dir(), r["file_path"])
     mode = r.get("mode", "rm")
 
-    # Employee mode: skip transcription, send to Mansi's API
+    # Employee mode: skip transcription, available via PULL endpoint for Mansi
     if mode == "employee":
         db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
                   summary="Employee recording - no transcription", transcript_json=[], is_csp_call=0)
-        log.info(f"Employee recording {r['id']} marked done (no transcription)")
-        # Send to Mansi's API
-        if not send_to_mansi_api(r):
-            # If API send fails, keep it as done but log failure
-            log.warning(f"Failed to send employee recording {r['id']} to Mansi API")
+        log.info(f"Employee recording {r['id']} marked done (available via /api/mansi/recordings)")
         return
 
     # Legacy DC call type support (backward compat)
