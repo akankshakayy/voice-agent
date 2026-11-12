@@ -1,6 +1,6 @@
 const toLogin = () => { location.href = "login?next=" + encodeURIComponent(location.pathname); };
 const api = async (path, opts = {}) => {
-  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts,
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, credentials: "include", ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined });
   if (r.status === 401) { toLogin(); throw new Error("Not signed in"); }
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
