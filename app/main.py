@@ -1387,7 +1387,13 @@ def remove_allowed_number(number_id: int):
 @app.get("/api/employees", dependencies=[Depends(allow("admin"))])
 def list_employees():
     """List all Employees."""
-    return db.q("SELECT id, name, phone, email, department, created_at, active FROM employees ORDER BY name")
+    try:
+        result = db.q("SELECT id, name, phone, email, department, created_at, active FROM employees ORDER BY name")
+        log.info(f"list_employees: returned {len(result)} employees")
+        return result
+    except Exception as e:
+        log.error(f"list_employees ERROR: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
 
 
 class EmployeeBody(BaseModel):
