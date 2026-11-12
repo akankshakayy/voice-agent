@@ -14,6 +14,7 @@ RUN useradd -m -u 10001 appuser && \
 USER 10001
 
 ENV PYTHONUNBUFFERED=1
+ENV COOKIE_PATH=/
 EXPOSE 8000
 
 # Persistent volumes for database and logs
