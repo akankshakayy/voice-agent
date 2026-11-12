@@ -1802,8 +1802,8 @@ def list_recordings(request: Request, status: str | None = None, rm_id: int | No
         result = [recordings.add_transcription_accuracy(r) for r in recs]
         return {"counts": counts, "recordings": result}
     except Exception as e:
-        log.error(f"  ERROR: {e}", exc_info=True)
-        raise
+        log.error(f"  ERROR in /api/recordings: {type(e).__name__}: {e}", exc_info=True)
+        raise HTTPException(500, f"{type(e).__name__}: {str(e)[:200]}")
 
 
 def _own_recording(request: Request, rec_id: int) -> dict:
