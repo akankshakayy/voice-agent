@@ -19,8 +19,8 @@ EXPOSE 8000
 # Persistent volumes for database and logs
 VOLUME ["/app/data", "/data"]
 
-# Startup script: handle database from host mount
-RUN echo '#!/bin/bash\nset -e\necho "Preparing directories..."\nmkdir -p /app/data/logs\necho "Checking for mounted host database..."\nif [ -f /data/eko_agent.db ]; then\n  echo "Found database in /data mount (host volume)"\n  cp /data/eko_agent.db /app/data/\n  echo "Copied to /app/data/"\nelif [ ! -f /app/data/eko_agent.db ]; then\n  echo "WARNING: No database found - app will use in-memory or create new"\nelse\n  echo "Database already in /app/data"\nfi\necho "Starting Eko RM Voice Agent..."\nexec python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "*"' > /app/start.sh && \
+# Startup script: initialize database location
+RUN echo '#!/bin/bash\nset -e\necho "Setting up data directory..."\nmkdir -p /app/data/logs\necho "Checking database location..."\nDB_PATH="${DB_PATH:-/app/data/eko_agent.db}"\necho "Using database: $DB_PATH"\nif [ ! -f "$DB_PATH" ] && [ -f /data/eko_agent.db ]; then\n  echo "Copying database from /data mount..."\n  cp /data/eko_agent.db /app/data/ 2>/dev/null || echo "Could not copy from /data"\nfi\necho "Starting Eko RM Voice Agent..."\nexec python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "*"' > /app/start.sh && \
     chmod +x /app/start.sh
 
 CMD ["/app/start.sh"]
