@@ -1,0 +1,9 @@
+[build]
+type = "dockerfile"
+
+[service.web]
+port = 8000
+health = "/status"
+volumes = [
+  { name = "data", path = "/app/data" }
+]
