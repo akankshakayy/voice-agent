@@ -1,7 +1,0 @@
-[services.web]
-port = 8000
-health = "/status"
-
-[[services.web.volumes]]
-name = "data"
-path = "/app/data"

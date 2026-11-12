@@ -15,7 +15,6 @@ from datetime import datetime
 from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
-import os as _os_for_dotenv
 
 # Load environment variables from .env.local (takes precedence)
 load_dotenv('.env.local')
