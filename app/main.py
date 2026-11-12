@@ -111,7 +111,20 @@ def is_dev_mode() -> bool:
 # The login cookie is sent only to Sahayak's own path. On a shared host (indev.eko.in runs other people's apps too)
 # a cookie for "/" would reach every app there. Taken from APP_BASE_URL (".../rm-voice-agent"), or COOKIE_PATH.
 def cookie_path() -> str:
-    return (os.environ.get("COOKIE_PATH") or urlparse(os.environ.get("APP_BASE_URL", "")).path or "/").rstrip("/") or "/"
+    # Get path from COOKIE_PATH env var, or extract from APP_BASE_URL, default to "/"
+    path = os.environ.get("COOKIE_PATH")
+    if not path:
+        # Extract path from APP_BASE_URL (e.g., https://indev.eko.in/rm-voice-agent -> /rm-voice-agent)
+        app_base = os.environ.get("APP_BASE_URL", "")
+        if app_base:
+            path = urlparse(app_base).path
+    # Ensure path doesn't end with / (except for root /)
+    if path and path != "/":
+        path = path.rstrip("/")
+    # Default to "/" if empty
+    path = path or "/"
+    log.debug(f"cookie_path: COOKIE_PATH={os.environ.get('COOKIE_PATH')}, APP_BASE_URL={os.environ.get('APP_BASE_URL')}, final path={path}")
+    return path
 
 
 def client_ip(request: Request) -> str | None:
@@ -326,8 +339,9 @@ def google_callback(request: Request, code: str = "", state: str = "", error: st
         nxt = who["next"]                               # checked at start: a page name, ./ or a same-site path
         resp = RedirectResponse(nxt if nxt.startswith("/") else back + nxt, 303)
         auth.end_session(request.cookies.get(auth.COOKIE))
-        _set_session_cookie(resp, auth.create_session(u["id"], client_ip(request), request.headers.get("user-agent")),
-                            request)
+        token = auth.create_session(u["id"], client_ip(request), request.headers.get("user-agent"))
+        _set_session_cookie(resp, token, request)
+        log.info(f"Google login successful: {u['email']} -> session token created, cookie set with path={cookie_path()}")
     resp.delete_cookie(google_auth.COOKIE, path=cookie_path())
     return resp
 
