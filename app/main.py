@@ -280,8 +280,13 @@ def _signed_in(user: dict, request: Request) -> JSONResponse:
 
 
 def _set_session_cookie(resp, token: str, request: Request):
+    # Ensure cookie is set with secure flag when on HTTPS (required for proper cross-redirect cookie handling)
+    secure_flag = is_https(request) or auth.COOKIE_SECURE
+    # Use SameSite=None with Secure for proper redirect handling, or Lax for HTTP dev environments
+    samesite = "none" if secure_flag else "lax"
     resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400,
-                    httponly=True, samesite="lax", secure=auth.COOKIE_SECURE or is_https(request), path=cookie_path())
+                    httponly=True, samesite=samesite, secure=secure_flag, path=cookie_path())
+    log.info(f"Session cookie set: secure={secure_flag}, samesite={samesite}, path={cookie_path()}")
 
 
 def _clear_session_cookie(resp):
