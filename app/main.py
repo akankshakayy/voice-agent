@@ -1871,6 +1871,20 @@ def recording_audio(rec_id: int, request: Request):
     return FileResponse(path)
 
 
+@app.get("/api/autogmap/recordings/{rec_id}/audio")
+def autogmap_recording_audio(rec_id: int):
+    """AutoGMap open endpoint to download employee recording audio (no auth required)."""
+    row = db.q("SELECT file_path, mode FROM recordings WHERE id=?", (rec_id,), one=True)
+    if not row:
+        raise HTTPException(404, "Recording not found")
+    if row["mode"] != "employee":
+        raise HTTPException(403, "Only employee mode recordings can be fetched via AutoGMap")
+    path = recordings.audio_file(row)
+    if not os.path.exists(path):
+        raise HTTPException(404, "The audio file is missing")
+    return FileResponse(path)
+
+
 @app.post("/api/recordings/upload")
 def upload_recordings(audio: list[UploadFile] = File(...), rm_id: int | None = Form(None), started_at: str = Form(""),
                       direction: str = Form("unknown"), other_number: str = Form(""), actor=Depends(allow(*STAFF))):
