@@ -764,11 +764,11 @@
             }
             // For production: use current origin + path prefix (e.g., https://indev.eko.in/rm-voice-agent)
             const pathParts = loc.pathname.split('/').filter(Boolean);
-            if (pathParts.length > 0 && pathParts[pathParts.length - 1] !== 'admin') {
-                // Already at a path like /rm-voice-agent/admin, get parent
+            // Remove 'admin' from the end if present to get the base path
+            if (pathParts.length > 0 && pathParts[pathParts.length - 1] === 'admin') {
                 pathParts.pop();
             }
-            const basePath = '/' + pathParts.join('/');
+            const basePath = pathParts.length > 0 ? '/' + pathParts.join('/') : '';
             return loc.origin + basePath;
         })();
 
