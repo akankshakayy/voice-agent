@@ -9,7 +9,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN useradd -m -u 10001 appuser && \
     mkdir -p /app/data/logs && \
     chown -R 10001:10001 /app && \
-    chmod -R 755 /app
+    chmod 755 /app && \
+    chmod 755 /app/data && \
+    find /app -type f -exec chmod 644 {} \; && \
+    find /app -type d -exec chmod 755 {} \;
 
 USER 10001
 
