@@ -1,0 +1,7 @@
+services:
+  rm-voice-agent:
+    volumes:
+      - name: data
+        path: /app/data
+      - name: logs
+        path: /data
