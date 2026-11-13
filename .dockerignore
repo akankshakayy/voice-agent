@@ -38,3 +38,7 @@ uploader/.gradle/
 *.log
 .claude/
 .pytest_cache/
+
+# BUT DO INCLUDE database files (needed for production)
+!eko_agent.db
+!data/eko_agent.db
