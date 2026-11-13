@@ -1,5 +1,11 @@
 services:
   rm-voice-agent:
+    # Note: eko-deploy manages volume mounts
+    # Local dev: volumes should mount from /home/cat/eko-rm-voice-agent/data
+    # Production: volumes should mount from persistent storage on the host
+    # Format: host_path:container_path
     volumes:
-      - /home/cat/eko-rm-voice-agent/data:/app/data
-      - /home/cat/eko-rm-voice-agent/data:/data
+      # Database and recordings storage (must be persistent across restarts)
+      - /data/rm-voice-agent:/app/data
+      # Alternative mount for backward compatibility
+      - /data/rm-voice-agent:/data

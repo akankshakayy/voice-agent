@@ -6,13 +6,21 @@ COPY . /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Create non-root user and data directories
+# Note: When volumes are mounted, host UIDs may not match container UIDs
+# Solution: Use 777 permissions on mounted directories so any UID can write
 RUN useradd -m -u 10001 appuser && \
     mkdir -p /app/data/logs && \
+    mkdir -p /data/logs && \
     chown -R 10001:10001 /app && \
     chmod 755 /app && \
-    chmod 755 /app/data && \
+    chmod 777 /app/data && \
+    chmod 777 /app/data/logs && \
+    chmod 777 /data && \
     find /app -type f -exec chmod 644 {} \; && \
     find /app -type d -exec chmod 755 {} \;
+
+# Fix /app/data and /data permissions again for mounted volumes
+RUN chmod 777 /app/data /app/data/logs /data 2>/dev/null || true
 
 USER 10001
 
