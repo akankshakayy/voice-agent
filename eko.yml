@@ -2,6 +2,8 @@ services:
   rm-voice-agent:
     volumes:
       - name: data
+        hostPath: /home/cat/eko-rm-voice-agent/data
         path: /app/data
       - name: logs
+        hostPath: /home/cat/eko-rm-voice-agent/data
         path: /data
