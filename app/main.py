@@ -32,6 +32,18 @@ from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFID
 STATIC = os.path.join(os.path.dirname(__file__), "..", "static")
 log = setup_logging("eko")
 
+# Diagnostic: write startup status
+import time
+_data_dir = os.environ.get("DATA_DIR", "data")
+_startup_file = os.path.join(_data_dir, "startup.log")
+try:
+    os.makedirs(_data_dir, exist_ok=True)
+    with open(_startup_file, "a") as f:
+        f.write(f"{time.time()} | App imports complete, logger initialized\n")
+        f.flush()
+except Exception as e:
+    pass
+
 
 def _reap_stale_calls(stop: threading.Event):
     """Every minute, close calls nobody has touched for CALL_IDLE_TIMEOUT_MIN minutes."""
@@ -1344,7 +1356,23 @@ def debug_db_path():
 @app.get("/api/dcs")
 def list_dcs():
     """List all District Coordinators."""
-    return db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
+    try:
+        result = db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
+        return result
+    except Exception as e:
+        log.error(f"ERROR in /api/dcs: {type(e).__name__}: {str(e)}", exc_info=True)
+        import traceback
+        _data_dir = os.environ.get("DATA_DIR", "data")
+        _error_file = os.path.join(_data_dir, "api_dcs_error.log")
+        try:
+            with open(_error_file, "w") as f:
+                f.write(f"Exception: {str(e)}\n\n")
+                f.write(traceback.format_exc())
+                f.write(f"\n\nDB_PATH: {db.DB_PATH}\n")
+                f.write(f"DB exists: {os.path.exists(db.DB_PATH)}\n")
+        except:
+            pass
+        raise
 
 
 class DCBody(BaseModel):
