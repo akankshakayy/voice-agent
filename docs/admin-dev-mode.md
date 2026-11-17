@@ -31,14 +31,14 @@ Start the server with `DEV_MODE=1`:
 
 ```bash
 # Option 1: Set environment variable in shell
-DEV_MODE=1 uvicorn app.main:app --reload --port 8000
+DEV_MODE=1 python -m uvicorn app.main:app --reload --port 8000
 
 # Option 2: Add to .env.local (create if needed)
 echo "DEV_MODE=1" >> .env.local
 
 # Option 3: Set in your IDE/terminal session
 export DEV_MODE=1
-uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8000
 ```
 
 Then access the admin panel:
@@ -46,6 +46,8 @@ Then access the admin panel:
 ```
 http://localhost:8000/admin
 ```
+
+You'll see the data loaded from the database (DCs, Employees, Allowed Numbers, Applicant Numbers).
 
 ### Security Notes
 
@@ -125,7 +127,32 @@ print('✓ /admin is accessible in dev mode')
   - Works with existing `.env` files
   - Set `DEV_MODE=1` only when needed for local development
 
+## Debugging Database Path Issues
+
+If you encounter database connection issues, you can check which database path the app is using:
+
+```bash
+# Check database path configuration (no auth required)
+curl http://localhost:8000/api/debug/db-path | python -m json.tool
+```
+
+This returns:
+```json
+{
+  "EKO_DB_PATH_env": "/app/data/eko_agent.db",  // from EKO_DB_PATH env var
+  "db.DB_PATH_actual": "/home/cat/eko-rm-voice-agent/data/eko_agent.db",  // actual path being used
+  "exists": true,
+  "size_bytes": 536000
+}
+```
+
+This helps diagnose:
+- Whether the database file exists
+- What path the app is actually using
+- File size and permissions
+
 ## Related Documentation
 
 - [Auth System](../app/auth.py) - User roles and authentication
 - [Main App](../app/main.py) - FastAPI endpoints and middleware
+- [Database Setup](./DATABASE.md) - Database configuration
