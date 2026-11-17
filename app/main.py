@@ -59,6 +59,18 @@ def _reap_stale_calls(stop: threading.Event):
 
 @asynccontextmanager
 async def lifespan(_app):
+    # Diagnostic: record lifespan startup
+    _data_dir = os.environ.get("DATA_DIR", "data")
+    try:
+        os.makedirs(_data_dir, exist_ok=True)
+        with open(os.path.join(_data_dir, "lifespan.log"), "a") as f:
+            f.write(f"{time.time()} | Lifespan startup starting\n")
+            f.write(f"  EKO_DB_PATH={os.environ.get('EKO_DB_PATH', 'NOT SET')}\n")
+            f.write(f"  db.DB_PATH={db.DB_PATH}\n")
+            f.flush()
+    except Exception as e:
+        pass
+
     # Auto-migrate database from /tmp if needed
     try:
         bootstrap.migrate_db_if_needed()
@@ -82,6 +94,29 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Eko RM Voice Agent", version="0.1.0", lifespan=lifespan)
+
+@app.on_event("startup")
+async def startup_diagnostic():
+    """Write diagnostic info at startup."""
+    import traceback
+    _data_dir = os.environ.get("DATA_DIR", "data")
+    _diag_file = os.path.join(_data_dir, "startup.log")
+    try:
+        os.makedirs(_data_dir, exist_ok=True)
+        with open(_diag_file, "a") as f:
+            f.write(f"{time.time()} | FastAPI startup event triggered\n")
+            f.write(f"  EKO_DB_PATH={os.environ.get('EKO_DB_PATH', 'NOT SET')}\n")
+            f.write(f"  DATA_DIR={_data_dir}\n")
+            f.write(f"  db.DB_PATH={db.DB_PATH}\n")
+            f.write(f"  DB exists={os.path.exists(db.DB_PATH)}\n")
+            f.flush()
+    except Exception as e:
+        try:
+            with open(os.path.join(_data_dir, "startup_error.txt"), "w") as f:
+                f.write(f"Error in startup_diagnostic: {str(e)}\n")
+                f.write(traceback.format_exc())
+        except:
+            pass
 
 # Enable CORS for admin panel
 app.add_middleware(
