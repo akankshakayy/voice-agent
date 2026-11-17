@@ -1344,19 +1344,7 @@ def debug_db_path():
 @app.get("/api/dcs")
 def list_dcs():
     """List all District Coordinators."""
-    import traceback
-    import os
-    try:
-        result = db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
-        return result
-    except Exception as e:
-        return {
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "db_path": os.environ.get("EKO_DB_PATH", "NOT SET"),
-            "db_exists": os.path.exists(os.environ.get("EKO_DB_PATH", "")),
-            "tables": str(db.q("SELECT name FROM sqlite_master WHERE type='table';")) if hasattr(db, 'q') else "DB not accessible",
-        }
+    return db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
 
 
 class DCBody(BaseModel):

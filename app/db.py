@@ -360,22 +360,35 @@ def conn(retry=True) -> sqlite3.Connection:
             _conn.commit()
         if "report_md" not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
             for col in ("report_md TEXT", "report_error TEXT", "report_at REAL", "report_s REAL", "report_model TEXT"):
-                _conn.execute(f"ALTER TABLE recordings ADD COLUMN {col}")    # the full summary (app/report.py)
+                try:
+                    _conn.execute(f"ALTER TABLE recordings ADD COLUMN {col}")
+                except sqlite3.OperationalError:
+                    pass
             _conn.commit()
         if "timing_json" not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
-            _conn.execute("ALTER TABLE recordings ADD COLUMN timing_json TEXT")   # how long each step took
+            try:
+                _conn.execute("ALTER TABLE recordings ADD COLUMN timing_json TEXT")
+            except sqlite3.OperationalError:
+                pass
             _conn.commit()
         if "stt_json" not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
-            # Whisper's words and the voice turns, kept so "Process again" doesn't redo the slow, paid parts
-            _conn.execute("ALTER TABLE recordings ADD COLUMN stt_json TEXT")
+            try:
+                _conn.execute("ALTER TABLE recordings ADD COLUMN stt_json TEXT")
+            except sqlite3.OperationalError:
+                pass
             _conn.commit()
         if "next_try_at" not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
-            _conn.execute("ALTER TABLE recordings ADD COLUMN next_try_at REAL")   # when a failed one is retried
+            try:
+                _conn.execute("ALTER TABLE recordings ADD COLUMN next_try_at REAL")
+            except sqlite3.OperationalError:
+                pass
             _conn.commit()
         if "simulated" not in {r[1] for r in _conn.execute("PRAGMA table_info(calls)")}:
-            # Simulated calls send no webhook events. Every call so far was a demo or a console test
-            _conn.execute("ALTER TABLE calls ADD COLUMN simulated INTEGER DEFAULT 0")
-            _conn.execute("UPDATE calls SET simulated=1")
+            try:
+                _conn.execute("ALTER TABLE calls ADD COLUMN simulated INTEGER DEFAULT 0")
+                _conn.execute("UPDATE calls SET simulated=1")
+            except sqlite3.OperationalError:
+                pass
         # Phase 4+ migrations: mode, dc_id, employee_id for mode-aware recordings
         for col, dtype in [("mode", "TEXT DEFAULT 'rm'"), ("dc_id", "INTEGER"), ("employee_id", "INTEGER")]:
             if col not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
@@ -387,10 +400,13 @@ def conn(retry=True) -> sqlite3.Connection:
             _conn.commit()
         if "role" not in {r[1] for r in _conn.execute("PRAGMA table_info(users)")}:
             # Accounts made before roles existed: the first becomes admin, RM-linked ones RMs, the rest ops
-            _conn.execute("ALTER TABLE users ADD COLUMN role TEXT")
-            _conn.execute("""UPDATE users SET role = CASE WHEN id = (SELECT MIN(id) FROM users) THEN 'admin'
-                             WHEN rm_id IS NOT NULL THEN 'rm' ELSE 'ops' END""")
-            _conn.commit()
+            try:
+                _conn.execute("ALTER TABLE users ADD COLUMN role TEXT")
+                _conn.execute("""UPDATE users SET role = CASE WHEN id = (SELECT MIN(id) FROM users) THEN 'admin'
+                                 WHEN rm_id IS NOT NULL THEN 'rm' ELSE 'ops' END""")
+                _conn.commit()
+            except sqlite3.OperationalError:
+                pass
         _add_columns(_conn, "rms", {"email": "TEXT", "source": "TEXT"}, demo_source=True)
         _add_columns(_conn, "csps", {"shared_phone": "TEXT", "alt_phone": "TEXT", "email": "TEXT", "category": "TEXT",
                                      "state": "TEXT", "lho": "TEXT", "population": "TEXT", "terminal_status": "TEXT",
