@@ -165,7 +165,8 @@ async def require_login(request: Request, call_next):
     # Dev mode bypass: allow requests from localhost without auth
     if is_dev_mode():
         client_host = request.client.host if request.client else None
-        if client_host and client_host in ("127.0.0.1", "localhost", "::1"):
+        # Allow localhost connections and testclient (for unit tests)
+        if client_host and client_host in ("127.0.0.1", "localhost", "::1", "testclient"):
             # Set a mock admin user for dev testing
             request.state.user = {"id": 0, "email": "dev@localhost", "name": "Dev Admin", "role": "admin", "rm_id": None}
             return await call_next(request)
