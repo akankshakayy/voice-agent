@@ -93,7 +93,7 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
                  "/status", "/healthz", "/health", "/api/health", "/ping",  # Health check endpoints - no auth required
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
-                "/api/recordings/cleanup"}
+                "/api/recordings/cleanup", "/api/debug/db-path"}
 PUBLIC_PREFIXES = ("/static/",)  # All admin APIs require auth via @allow("admin") decorator
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
@@ -1318,6 +1318,17 @@ def revoke_upload_token(token_id: int):
 
 
 # ------------------------------------------------------------------ DC (District Coordinator) Management
+@app.get("/api/debug/db-path")
+def debug_db_path():
+    """Debug: show what database path the app is using"""
+    import os
+    return {
+        "EKO_DB_PATH_env": os.environ.get("EKO_DB_PATH", "(not set)"),
+        "db.DB_PATH_actual": db.DB_PATH,
+        "exists": os.path.exists(db.DB_PATH),
+        "size_bytes": os.path.getsize(db.DB_PATH) if os.path.exists(db.DB_PATH) else 0
+    }
+
 @app.get("/api/dcs", dependencies=[Depends(allow("admin"))])
 def list_dcs():
     """List all District Coordinators."""
