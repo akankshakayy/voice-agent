@@ -2,6 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 COPY . /app/
+# Explicitly copy database file even though it's in git
+COPY eko_agent.db /app/
 
 RUN pip install --no-cache-dir -r requirements.txt
 
