@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="pragma" content="no-cache">
+    <meta http-equiv="expires" content="0">
     <title>Eko Admin Panel - Uploader Management</title>
     <style>
         * {
@@ -758,22 +761,19 @@
         // Determine API base from current URL (works in both dev and production)
         const API_BASE = (() => {
             const loc = window.location;
-            // For localhost development: use http://localhost:8000
+            // For localhost development: use http://localhost:9000
             if (loc.hostname === 'localhost' || loc.hostname === '127.0.0.1') {
-                return 'http://localhost:8000';
+                return 'http://localhost:9000';
             }
-            // For production: use current origin + path prefix (e.g., https://indev.eko.in/rm-voice-agent)
-            const pathParts = loc.pathname.split('/').filter(Boolean);
-            // Remove 'admin' from the end if present to get the base path
-            if (pathParts.length > 0 && pathParts[pathParts.length - 1] === 'admin') {
-                pathParts.pop();
-            }
-            const basePath = pathParts.length > 0 ? '/' + pathParts.join('/') : '';
-            return loc.origin + basePath;
+            // For production: use relative path so reverse proxy works
+            // Page served from /rm-voice-agent/admin, API at /rm-voice-agent/api/...
+            return '/rm-voice-agent';
         })();
 
         // Initialize
+        console.log('Page loaded, API_BASE:', API_BASE);
         document.addEventListener('DOMContentLoaded', () => {
+            console.log('DOMContentLoaded fired, calling setupEventListeners and loadDCs');
             setupEventListeners();
             loadDCs();
         });
@@ -862,11 +862,16 @@
         // API Calls
         async function loadDCs() {
             try {
+                console.log('loadDCs called, fetching from:', `${API_BASE}/api/dcs`);
                 const response = await fetch(`${API_BASE}/api/dcs`, { credentials: "include" });
+                console.log('Response status:', response.status);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 state.dcs = await response.json();
+                console.log('Got DCs:', state.dcs.length, 'records');
                 renderDCsTable();
+                console.log('renderDCsTable completed');
             } catch (err) {
+                console.error('Error loading DCs:', err);
                 showAlert(`Failed to load DCs: ${err.message}`, 'error');
                 document.getElementById('dcsTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">⚠️</div><p>Failed to load data</p></div>';
             }
@@ -934,21 +939,25 @@
 
         // Rendering
         function renderDCsTable() {
+            console.log('renderDCsTable called with', state.dcs.length, 'DCs');
             const filtered = state.dcs.filter(dc =>
                 (dc.name.toLowerCase().includes(state.dcsSearch)) ||
                 (dc.phone.includes(state.dcsSearch)) ||
-                (dc.region.toLowerCase().includes(state.dcsSearch))
+                ((dc.region || '').toLowerCase().includes(state.dcsSearch))
             );
+            console.log('Filtered:', filtered.length, 'DCs');
 
             const start = (state.dcsPage - 1) * state.itemsPerPage;
             const end = start + state.itemsPerPage;
             const page = filtered.slice(start, end);
 
             if (filtered.length === 0) {
+                console.log('No DCs found, showing empty state');
                 document.getElementById('dcsTableContainer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No District Coordinators found</p></div>';
                 document.getElementById('dcsPagination').innerHTML = '';
                 return;
             }
+            console.log('Rendering', page.length, 'DCs in table');
 
             const html = `
                 <table>
@@ -995,7 +1004,7 @@
             const filtered = state.employees.filter(emp =>
                 (emp.name.toLowerCase().includes(state.employeesSearch)) ||
                 (emp.phone.includes(state.employeesSearch)) ||
-                (emp.department.toLowerCase().includes(state.employeesSearch))
+                ((emp.department || '').toLowerCase().includes(state.employeesSearch))
             );
 
             const start = (state.employeesPage - 1) * state.itemsPerPage;

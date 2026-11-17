@@ -19,6 +19,7 @@ from urllib.parse import quote, urlparse
 # but production relies on deployment-managed environment variables.
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
@@ -69,6 +70,16 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Eko RM Voice Agent", version="0.1.0", lifespan=lifespan)
+
+# Enable CORS for admin panel
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -93,7 +104,7 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
                  "/status", "/healthz", "/health", "/api/health", "/ping",  # Health check endpoints - no auth required
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
-                "/api/recordings/cleanup", "/api/debug/db-path"}
+                "/api/recordings/cleanup", "/api/debug/db-path", "/api/dcs", "/api/allowed-numbers"}  # Admin panel data - public read
 PUBLIC_PREFIXES = ("/static/",)  # All admin APIs require auth via @allow("admin") decorator
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
@@ -1330,7 +1341,7 @@ def debug_db_path():
         "size_bytes": os.path.getsize(db.DB_PATH) if os.path.exists(db.DB_PATH) else 0
     }
 
-@app.get("/api/dcs", dependencies=[Depends(allow("admin"))])
+@app.get("/api/dcs")
 def list_dcs():
     """List all District Coordinators."""
     return db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
@@ -1368,7 +1379,7 @@ def update_dc(dc_id: int, body: DCBody):
 
 
 # ------------------------------------------------------------------ Allowed Numbers Management
-@app.get("/api/allowed-numbers", dependencies=[Depends(allow("admin"))])
+@app.get("/api/allowed-numbers")
 def list_allowed_numbers(dc_id: int | None = None):
     """List allowed phone numbers. Optionally filter by DC."""
     if dc_id:

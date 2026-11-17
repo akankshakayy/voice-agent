@@ -1,13 +1,7 @@
 services:
   rm-voice-agent:
-    environment:
-      # Point to the database in the mounted volume
-      EKO_DB_PATH: /app/data/eko_agent.db
-    # Note: eko-deploy manages volume mounts; production uses /data
-    # For local dev with docker-compose, mount your data directory
-    # Format: host_path:container_path
+    # Note: eko-deploy manages volume mounts
+    # Mount the voice_agent/data directory which contains eko_agent.db with 9 DCs
     volumes:
-      # Database and recordings storage (must be persistent across restarts)
-      - /data/rm-voice-agent:/app/data
-      # Alternative mount for backward compatibility
-      - /data/rm-voice-agent:/data
+      - /home/akanksha/voice_agent/data:/app/data
+      - /home/akanksha/voice_agent/data:/data
