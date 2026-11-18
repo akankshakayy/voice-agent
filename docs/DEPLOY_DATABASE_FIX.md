@@ -13,7 +13,7 @@ Admin panel empty; every DB query failed with `sqlite3.OperationalError: unable 
 - eko-deploy builds from the server folder `~/voice_agent`, so commits must be `git pull`ed there first.
 
 ## Fix
-- `eko-deploy.toml`: port 8000, `health_path=/healthz`, user 10001, `EKO_DB_PATH=/app/data/eko_agent.db`,
+- `eko-deploy.toml`: port 8000, `health_path=/healthz`, user 10001, `DATA_DIR=/app/data` (`EKO_*` env names are reserved by the platform; `EKO_DB_PATH` comes from the Dockerfile ENV / `start.sh` default),
   a named persistent volume at `/app/data`, and the list of secrets.
 - `start.sh`: seeds `/app/data/eko_agent.db` from the bundled copy **only if it doesn't exist**; never overwrites.
 - `.dockerignore`: excludes `.env` and `data/` from the image.
