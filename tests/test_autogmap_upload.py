@@ -348,7 +348,11 @@ class TestRecordingIntegration:
         """Test queuing upload for number NOT in AutoGMap applicants."""
         from app import db, recordings
 
-        # Don't add the number to AutoGMap cache
+        from unittest import mock
+        from app import autogmap
+        # AutoGMap is on and its applicant list is loaded, but this number is not on it
+        db.x("INSERT OR IGNORE INTO autogmap_numbers(phone, local, name, since, synced_at, active) VALUES(?,?,?,?,?,1)",
+             ("9876500000", "RM", "Someone else", "2026-11-01", 0))
 
         # Create a test recording
         rid = db.x(
@@ -357,7 +361,8 @@ class TestRecordingIntegration:
             ("abc123", 1, "rm", "test/file.ogg", 1000, 120, "incoming", "9999999999"),
         )
 
-        recordings.queue_autogmap_upload(rid, "test/file.ogg", "9999999999", "inbound", 120)
+        with mock.patch.object(autogmap, "AUTOGMAP_ENABLED", True):
+            recordings.queue_autogmap_upload(rid, "test/file.ogg", "9999999999", "inbound", 120)
 
         # Verify recording status is set to not_in_applicants
         rec = db.q("SELECT autogmap_status FROM recordings WHERE id=?", (rid,), one=True)

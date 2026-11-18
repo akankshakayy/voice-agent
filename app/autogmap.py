@@ -216,6 +216,8 @@ class AutoGMapClient:
         direction: str = "in",
         duration_sec: int = 0,
         device: str = None,
+        recording_id: int | None = None,
+        started_at: float | None = None,
     ) -> tuple[bool, str, dict]:
         """Upload a recording to AutoGMap.
 
@@ -283,12 +285,17 @@ class AutoGMapClient:
             async with httpx.AsyncClient(verify=True) as client:
                 with open(file_path, "rb") as f:
                     files = {"file": f}
+                    # Field names as in docs/AUTOGMAP_INTEGRATION.md (POST /call-recorder/recordings)
                     data = {
                         "phone": phone,
-                        "direction": direction,
-                        "duration": str(duration_sec),
+                        "direction": api_direction(direction),
+                        "duration_seconds": str(int(duration_sec or 0)),
                         "uploaded_at": datetime.now(tz=ZoneInfo("UTC")).isoformat(),
                     }
+                    if recording_id is not None:
+                        data["recording_id"] = str(recording_id)
+                    if started_at:
+                        data["started_at"] = datetime.fromtimestamp(float(started_at), tz=ZoneInfo("UTC")).isoformat()
                     if device:
                         data["device"] = device
 
@@ -418,6 +425,8 @@ class UploadRetryManager:
         direction: str = "in",
         duration_sec: int = 0,
         device: str = None,
+        recording_id: int | None = None,
+        started_at: float | None = None,
     ) -> tuple[bool, str, dict]:
         """Upload recording with automatic retry on retriable errors.
 
@@ -433,8 +442,9 @@ class UploadRetryManager:
         """
         for attempt in range(self.max_retries + 1):
             success, status, data = await self.client.upload_recording(
-                file_path, phone, direction, duration_sec, device
+                file_path, phone, direction, duration_sec, device, recording_id, started_at
             )
+            data = {**data, "attempts": attempt + 1}
 
             if success:
                 log.info("Upload succeeded on attempt %d", attempt + 1)
@@ -506,7 +516,8 @@ class UploadQueueWorker:
             try:
                 success, status, data = loop.run_until_complete(
                     self.retry_manager.upload_with_retry(
-                        file_path, phone, direction, duration_sec
+                        file_path, phone, direction, duration_sec,
+                        recording_id=rec_id, started_at=upload_job.get("started_at"),
                     )
                 )
             finally:
@@ -765,6 +776,7 @@ def queue_upload(
     direction: str,
     duration_sec: int,
     db_update_fn,
+    started_at: float | None = None,
 ) -> bool:
     """Queue a recording for rate-limited upload to AutoGMap.
 
@@ -792,6 +804,7 @@ def queue_upload(
         "direction": direction,
         "duration_sec": duration_sec,
         "db_update_fn": db_update_fn,
+        "started_at": started_at,
     }
 
     try:
@@ -846,15 +859,21 @@ def sync_loop(stop: threading.Event) -> None:
     # Load cached numbers from database on startup
     load_cached_numbers()
 
+    first = True
     while not stop.is_set():
         try:
             # Run async sync in a new event loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(sync.sync_numbers())
+                result = loop.run_until_complete(sync.sync_numbers())
             finally:
                 loop.close()
+            if result.get("success"):
+                # Recordings that arrived before the applicant list was known (or before a restart)
+                from . import recordings
+                recordings.queue_waiting_autogmap(include_pending=first)
+                first = False
 
         except Exception:
             log.exception("AutoGMap sync loop error")
@@ -926,6 +945,48 @@ def get_upload_queue_stats() -> dict:
 
 
 # Utility functions for database access
+
+def _digits10(phone: str) -> str:
+    """Last 10 digits: +91 98765 43210, 098765-43210 and 9876543210 are the same number."""
+    d = "".join(ch for ch in (phone or "") if ch.isdigit())
+    return d[-10:] if len(d) >= 10 else ""
+
+
+def api_direction(direction: str) -> str:
+    """Our recordings say incoming/outgoing; AutoGMap expects in/out."""
+    d = (direction or "").strip().lower()
+    if d.startswith("in"):
+        return "in"
+    if d.startswith("out"):
+        return "out"
+    return d
+
+
+def numbers_loaded() -> bool:
+    """True once the applicant list has been fetched at least once (kept in the database)."""
+    with _sync_lock:
+        if _cached_numbers:
+            return True
+    try:
+        return bool(db.q("SELECT 1 FROM autogmap_numbers WHERE active=1 LIMIT 1", one=True))
+    except Exception:
+        return False
+
+
+def match_number(phone: str) -> str | None:
+    """The applicant's number exactly as AutoGMap lists it, if `phone` is one of them (any format), else None."""
+    want = _digits10(phone)
+    if not want:
+        return None
+    with _sync_lock:
+        cached = list(_cached_numbers)
+    if not cached:
+        cached = [r["phone"] for r in db.q("SELECT phone FROM autogmap_numbers WHERE active=1")]
+    for p in cached:
+        if _digits10(p) == want:
+            return p
+    return None
+
 
 def has_number(phone: str) -> bool:
     """Check if a phone number is authorized for recording (cached or in DB).

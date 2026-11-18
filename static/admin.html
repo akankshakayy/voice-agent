@@ -1467,7 +1467,10 @@
                     throw new Error(error.detail || `HTTP ${response.status}`);
                 }
 
-                showAlert('Deleted successfully!', 'success');
+                const result = await response.json().catch(() => ({}));
+                showAlert(result.deactivated
+                    ? 'Has recordings/uploader history, so it was marked Inactive (uploader access revoked) instead of deleted.'
+                    : 'Deleted successfully!', 'success');
                 closeConfirm();
 
                 if (type === 'dcs') loadDCs();

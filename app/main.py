@@ -1373,6 +1373,29 @@ def update_dc(dc_id: int, body: DCBody):
     return db.q("SELECT * FROM dcs WHERE id=?", (dc_id,), one=True)
 
 
+def _remove_person(table: str, ref_col: str, person_id: int, ref_tables: tuple[str, ...]) -> dict:
+    """Delete a DC or Employee. If anything still points at them (recordings, uploader tokens, consents),
+    keep the row but mark it inactive and revoke their uploader tokens, so history keeps its name."""
+    if not db.q(f"SELECT id FROM {table} WHERE id=?", (person_id,), one=True):
+        raise HTTPException(404, "Not found")
+    refs = sum(db.q(f"SELECT COUNT(*) AS n FROM {t} WHERE {ref_col}=?", (person_id,), one=True)["n"]
+               for t in ref_tables)
+    if refs:
+        now = time.time()
+        db.x(f"UPDATE {table} SET active=0, updated_at=? WHERE id=?", (now, person_id))
+        db.x(f"UPDATE upload_tokens SET revoked_at=? WHERE {ref_col}=? AND revoked_at IS NULL", (now, person_id))
+        return {"ok": True, "deleted": False, "deactivated": True,
+                "reason": "Has recordings or uploader history: marked inactive and uploader access revoked"}
+    db.x(f"DELETE FROM {table} WHERE id=?", (person_id,))
+    return {"ok": True, "deleted": True, "deactivated": False}
+
+
+@app.delete("/api/dcs/{dc_id}", dependencies=[Depends(allow("admin"))])
+def delete_dc(dc_id: int):
+    """Delete a DC (or deactivate one that has history)."""
+    return _remove_person("dcs", "dc_id", dc_id, ("recordings", "upload_tokens", "dc_consents", "allowed_numbers"))
+
+
 # ------------------------------------------------------------------ Allowed Numbers Management
 @app.get("/api/allowed-numbers", dependencies=[Depends(allow("admin"))])
 def list_allowed_numbers(dc_id: int | None = None):
@@ -1462,6 +1485,12 @@ def update_employee(employee_id: int, body: EmployeeBody):
     fields["updated_at"] = time.time()
     db.update("employees", employee_id, **fields)
     return db.q("SELECT * FROM employees WHERE id=?", (employee_id,), one=True)
+
+
+@app.delete("/api/employees/{employee_id}", dependencies=[Depends(allow("admin"))])
+def delete_employee(employee_id: int):
+    """Delete an Employee (or deactivate one that has history)."""
+    return _remove_person("employees", "employee_id", employee_id, ("recordings", "upload_tokens"))
 
 
 # ------------------------------------------------------------------ Applicant Numbers Management (Phase 7b)

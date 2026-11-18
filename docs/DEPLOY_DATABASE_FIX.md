@@ -56,3 +56,17 @@ Tested: no sign-in → 401, admin → 200 (9 / 874), ops → 403.
   `~/voice_agent/data/eko_agent.bundled-20261118.db`. The file (real phone numbers) is still in git history.
 - `eko.yml` deleted: eko-deploy never read it; `eko-deploy.toml` is the real config.
 - SSH password removed from `deploy_data.sh` / `DEPLOYMENT_INSTRUCTIONS.md` (still in history: rotate it).
+
+## Employee/DC delete + push to Mansi's AutoGMap (Nov 18)
+- `DELETE /api/employees/{id}` and `DELETE /api/dcs/{id}` added (admin only); the admin page's Delete gave 405.
+  Someone with recordings/uploader history is kept but marked inactive and their uploader tokens revoked.
+- Employee recordings are PUSHED to AutoGMap (`POST AUTOGMAP_RECORDINGS_URL`, multipart: file, phone, direction
+  in/out, duration_seconds, recording_id, started_at), only if the other number is on AutoGMap's applicant list
+  (matched on the last 10 digits, sent in AutoGMap's own format). Rate-limited queue, retries 60/300/900 s.
+- Removed `send_to_mansi_api` (sent only JSON with an internal file path to the same URL: duplicate, no audio).
+- Recordings that arrive while AutoGMap is off or before the first numbers sync are `autogmap_status='waiting'`
+  and are sent after the next successful sync (also re-sends `pending` ones lost in a restart).
+- Pull endpoints (`/api/mansi/recordings`, `/api/autogmap/recordings/{id}/audio`) stay locked (sign-in / API key).
+- Server secrets: `AUTOGMAP_*` set, but `AUTOGMAP_ENABLED=false` because AutoGMap answers 401 to the current key.
+  To switch on once Mansi gives a valid key:
+  `eko-deploy secret set rm-voice-agent AUTOGMAP_API_KEY --stdin`, same for `AUTOGMAP_ENABLED` (`true`), then deploy.

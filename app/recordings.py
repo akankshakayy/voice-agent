@@ -374,7 +374,8 @@ def send_to_prachi_batch(max_batch: int = 50) -> dict:
         return {"sent": 0, "failed": len(payloads), "errors": [str(e)]}
 
 
-def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: str, duration_sec: int) -> None:
+def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: str, duration_sec: int,
+                          started_at: float | None = None) -> None:
     """Queue a recording for AutoGMap upload. Non-blocking; uses rate-limited queue (max 2 req/sec).
 
     Args:
@@ -387,9 +388,15 @@ def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: st
     try:
         from . import autogmap
 
-        # Check if phone is in AutoGMap applicants
-        if not autogmap.has_number(phone):
-            log.debug(f"Recording {rec_id}: Phone {phone} not in AutoGMap applicants; skipping upload")
+        # Not switched on, or the applicant list hasn't been fetched yet: wait; sent after the next sync
+        if not autogmap.AUTOGMAP_ENABLED or not autogmap.numbers_loaded():
+            db.update("recordings", rec_id, autogmap_status="waiting")
+            return
+
+        # Only calls with Mansi's applicants are sent (her API rejects the rest with 422)
+        applicant_phone = autogmap.match_number(phone)
+        if not applicant_phone:
+            log.info(f"Recording {rec_id}: other number is not an AutoGMap applicant; not sent")
             db.update("recordings", rec_id, autogmap_status="not_in_applicants")
             return
 
@@ -414,10 +421,11 @@ def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: st
 
         # Queue for rate-limited background upload
         db.update("recordings", rec_id, autogmap_status="pending")
-        queued = autogmap.queue_upload(rec_id, full_path, phone, direction, duration_sec, db_update_fn)
+        queued = autogmap.queue_upload(rec_id, full_path, applicant_phone, direction, duration_sec, db_update_fn,
+                                       started_at=started_at)
 
         if queued:
-            log.info(f"Recording {rec_id} queued for AutoGMap upload (phone={phone})")
+            log.info(f"Recording {rec_id} queued for AutoGMap upload")
         else:
             log.error(f"Failed to queue recording {rec_id} for AutoGMap upload; queue may be full")
             db.update("recordings", rec_id, autogmap_status="failed",
@@ -428,53 +436,20 @@ def queue_autogmap_upload(rec_id: int, file_path: str, phone: str, direction: st
         db.update("recordings", rec_id, autogmap_status="failed", autogmap_error=str(e)[:500])
 
 
-def send_to_mansi_api(rec: dict) -> bool:
-    """Send Employee recording (no transcript) to Mansi's API. Returns True if success/fatal, False if retry."""
-    import os
-    import requests
-
-    mansi_url = os.environ.get("AUTOGMAP_RECORDINGS_URL")
-    mansi_key = os.environ.get("AUTOGMAP_API_KEY")
-
-    if not mansi_url or not mansi_key:
-        log.warning(f"AUTOGMAP_RECORDINGS_URL or AUTOGMAP_API_KEY not set; skipping Mansi sync for recording {rec['id']}")
-        return True
-
-    payload = {
-        "recording_id": rec["id"],
-        "employee_id": rec.get("employee_id"),
-        "timestamp": rec.get("uploaded_at"),
-        "other_number": rec.get("other_number"),
-        "duration_sec": rec.get("duration_sec"),
-        "file_path": rec.get("file_path")
-    }
-
-    try:
-        response = requests.post(
-            mansi_url,
-            json=payload,
-            headers={"Authorization": f"Bearer {mansi_key}"},
-            timeout=30
-        )
-        if response.status_code == 200:
-            result = response.json()
-            db.update("recordings", rec["id"],
-                     mansi_api_sent_at=time.time(),
-                     mansi_request_id=result.get("request_id"))
-            log.info(f"Recording {rec['id']} sent to Mansi API (req_id={result.get('request_id')})")
-            return True
-        elif response.status_code >= 500:
-            log.warning(f"Mansi API error {response.status_code} for recording {rec['id']}; will retry")
-            return False
-        else:
-            log.error(f"Mansi API rejected recording {rec['id']}: {response.status_code}")
-            return True
-    except requests.Timeout:
-        log.warning(f"Mansi API timeout for recording {rec['id']}; will retry")
-        return False
-    except Exception as e:
-        log.error(f"Failed to send recording {rec['id']} to Mansi API: {e}")
-        return False
+def queue_waiting_autogmap(include_pending: bool = False) -> int:
+    """Queue employee recordings that are waiting for AutoGMap (sent before it was on / before the first sync).
+    include_pending: also re-send 'pending' ones; only right after start-up, when the in-memory queue is empty."""
+    states = ("waiting", "pending") if include_pending else ("waiting",)
+    rows = db.q(f"""SELECT id, file_path, other_number, direction, duration_sec, started_at FROM recordings
+                    WHERE mode='employee' AND status='done'
+                      AND (autogmap_status IS NULL OR autogmap_status IN ({','.join('?' * len(states))}))
+                    ORDER BY id""", states)
+    for r in rows:
+        queue_autogmap_upload(r["id"], r["file_path"], r["other_number"] or "", r["direction"] or "",
+                              int(r["duration_sec"] or 0), started_at=r["started_at"])
+    if rows:
+        log.info(f"AutoGMap: re-checked {len(rows)} waiting employee recording(s)")
+    return len(rows)
 
 
 # ---------------------------------------------------------------- receiving files
@@ -1085,10 +1060,9 @@ def process_one(r: dict):
         db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
                   summary="Employee recording - no transcription", transcript_json=[], is_csp_call=0)
         log.info(f"Employee recording {r['id']} marked done (no transcription)")
-        # Send to Mansi's API (PUSH)
-        if not send_to_mansi_api(r):
-            # If API send fails, keep it as done but log failure
-            log.warning(f"Failed to send employee recording {r['id']} to Mansi API")
+        # PUSH the audio to Mansi's AutoGMap (rate-limited queue; skipped if the number isn't an applicant)
+        queue_autogmap_upload(r["id"], r["file_path"], r.get("other_number") or "", r.get("direction") or "",
+                              int(r.get("duration_sec") or 0), started_at=r.get("started_at"))
         return
 
     # Legacy DC call type support (backward compat)
