@@ -32,18 +32,6 @@ from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFID
 STATIC = os.path.join(os.path.dirname(__file__), "..", "static")
 log = setup_logging("eko")
 
-# Diagnostic: write startup status
-import time
-_data_dir = os.environ.get("DATA_DIR", "data")
-_startup_file = os.path.join(_data_dir, "startup.log")
-try:
-    os.makedirs(_data_dir, exist_ok=True)
-    with open(_startup_file, "a") as f:
-        f.write(f"{time.time()} | App imports complete, logger initialized\n")
-        f.flush()
-except Exception as e:
-    pass
-
 
 def _reap_stale_calls(stop: threading.Event):
     """Every minute, close calls nobody has touched for CALL_IDLE_TIMEOUT_MIN minutes."""
@@ -117,6 +105,20 @@ async def startup_diagnostic():
                 f.write(traceback.format_exc())
         except:
             pass
+
+# Outermost middleware: catch ALL exceptions including in other middleware
+@app.middleware("http")
+async def catch_all_exceptions(request: Request, call_next):
+    """Catch any unhandled exceptions and return traceback as JSON."""
+    try:
+        return await call_next(request)
+    except Exception as e:
+        import traceback
+        log.error(f"UNHANDLED EXCEPTION in middleware: {type(e).__name__}: {str(e)}", exc_info=True)
+        return JSONResponse(
+            {"error": f"Unhandled {type(e).__name__}: {str(e)}", "traceback": traceback.format_exc()},
+            status_code=500
+        )
 
 # Enable CORS for admin panel
 app.add_middleware(
@@ -1395,19 +1397,12 @@ def list_dcs():
         result = db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
         return result
     except Exception as e:
-        log.error(f"ERROR in /api/dcs: {type(e).__name__}: {str(e)}", exc_info=True)
         import traceback
-        _data_dir = os.environ.get("DATA_DIR", "data")
-        _error_file = os.path.join(_data_dir, "api_dcs_error.log")
-        try:
-            with open(_error_file, "w") as f:
-                f.write(f"Exception: {str(e)}\n\n")
-                f.write(traceback.format_exc())
-                f.write(f"\n\nDB_PATH: {db.DB_PATH}\n")
-                f.write(f"DB exists: {os.path.exists(db.DB_PATH)}\n")
-        except:
-            pass
-        raise
+        log.error(f"ERROR in /api/dcs: {type(e).__name__}: {str(e)}", exc_info=True)
+        return JSONResponse(
+            {"error": str(e), "traceback": traceback.format_exc(), "db_path": db.DB_PATH, "db_exists": os.path.exists(db.DB_PATH)},
+            status_code=500
+        )
 
 
 class DCBody(BaseModel):
