@@ -53,6 +53,12 @@ async def lifespan(_app):
     except Exception as e:
         log.error("Bootstrap failed: %s", e)
 
+    # Fill empty DC / allowed-number tables from the bundled database (never overwrites existing rows)
+    try:
+        bootstrap.seed_reference_data()
+    except Exception:
+        log.exception("Seeding reference data failed")
+
     # Initialize AutoGMap upload queue for rate-limited uploads (max 2 req/sec)
     autogmap.init_upload_queue()
 

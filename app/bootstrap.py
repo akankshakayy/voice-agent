@@ -60,3 +60,47 @@ def migrate_db_if_needed():
 
 if __name__ == "__main__":
     migrate_db_if_needed()
+
+
+# Reference tables that are copied from the bundled database when the live one has none.
+SEED_TABLES = ("dcs", "allowed_numbers")
+
+
+def seed_reference_data(seed_path: str | None = None) -> dict:
+    """Copy DCs and allowed numbers from the bundled database into the live one, table by table,
+    ONLY when the live table is empty. Every other table (recordings, users, ...) is never touched.
+    Safe to run on every start: once a table has rows it is skipped.
+    Returns {table: rows_copied} (0 = skipped)."""
+    import logging
+    from . import db
+
+    log = logging.getLogger("eko.bootstrap")
+    seed_path = seed_path or os.environ.get("SEED_DB_PATH", "/app/eko_agent.db")
+    result = {t: 0 for t in SEED_TABLES}
+    if not os.path.exists(seed_path):
+        log.info("Seed: no bundled database at %s - nothing to seed", seed_path)
+        return result
+    if os.path.abspath(seed_path) == os.path.abspath(db.DB_PATH):
+        return result  # the live database IS the bundled one
+
+    # immutable=1: read without creating -wal/-shm files (the image filesystem is read-only)
+    src = sqlite3.connect(f"file:{seed_path}?mode=ro&immutable=1", uri=True)
+    try:
+        live = db.conn()
+        with db._lock:
+            for table in SEED_TABLES:
+                if live.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]:
+                    continue
+                live_cols = {r[1] for r in live.execute(f"PRAGMA table_info({table})")}
+                cols = [r[1] for r in src.execute(f"PRAGMA table_info({table})") if r[1] in live_cols]
+                if not cols:
+                    continue
+                rows = src.execute(f"SELECT {', '.join(cols)} FROM {table}").fetchall()
+                live.executemany(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", rows)
+                result[table] = len(rows)
+            live.commit()
+    finally:
+        src.close()
+    log.info("Seed from %s: %s", seed_path, result)
+    print(f"Seed reference data from {seed_path}: {result}", flush=True)
+    return result

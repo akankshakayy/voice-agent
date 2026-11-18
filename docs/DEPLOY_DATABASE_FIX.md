@@ -30,3 +30,13 @@ cd ~/voice_agent && git pull && git log --oneline -1
 eko-deploy deploy rm-voice-agent --no-prompt
 ```
 New secrets must also be added to `secrets = [...]` in `eko-deploy.toml`.
+
+## Follow-up (r0157 → next release): volume already had an empty database
+r0157 fixed the 500s, but the `data` volume already contained an `eko_agent.db` (origin unproven; most
+likely left by an earlier release), so `start.sh` did not seed it and both endpoints returned 0 rows.
+
+`app/bootstrap.py: seed_reference_data()` now runs at startup: for `dcs` and `allowed_numbers` only,
+if the live table is **empty**, it copies the rows (IDs kept) from the bundled `/app/eko_agent.db`
+(opened read-only, `immutable=1`). No other table is touched and existing rows are never overwritten;
+on later starts it copies nothing. Tested locally against an existing empty DB with an unrelated row:
+9 + 874 rows seeded, unrelated row kept, restart copied 0.
