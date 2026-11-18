@@ -47,18 +47,6 @@ def _reap_stale_calls(stop: threading.Event):
 
 @asynccontextmanager
 async def lifespan(_app):
-    # Diagnostic: record lifespan startup
-    _data_dir = os.environ.get("DATA_DIR", "data")
-    try:
-        os.makedirs(_data_dir, exist_ok=True)
-        with open(os.path.join(_data_dir, "lifespan.log"), "a") as f:
-            f.write(f"{time.time()} | Lifespan startup starting\n")
-            f.write(f"  EKO_DB_PATH={os.environ.get('EKO_DB_PATH', 'NOT SET')}\n")
-            f.write(f"  db.DB_PATH={db.DB_PATH}\n")
-            f.flush()
-    except Exception as e:
-        pass
-
     # Auto-migrate database from /tmp if needed
     try:
         bootstrap.migrate_db_if_needed()
@@ -82,43 +70,6 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Eko RM Voice Agent", version="0.1.0", lifespan=lifespan)
-
-@app.on_event("startup")
-async def startup_diagnostic():
-    """Write diagnostic info at startup."""
-    import traceback
-    _data_dir = os.environ.get("DATA_DIR", "data")
-    _diag_file = os.path.join(_data_dir, "startup.log")
-    try:
-        os.makedirs(_data_dir, exist_ok=True)
-        with open(_diag_file, "a") as f:
-            f.write(f"{time.time()} | FastAPI startup event triggered\n")
-            f.write(f"  EKO_DB_PATH={os.environ.get('EKO_DB_PATH', 'NOT SET')}\n")
-            f.write(f"  DATA_DIR={_data_dir}\n")
-            f.write(f"  db.DB_PATH={db.DB_PATH}\n")
-            f.write(f"  DB exists={os.path.exists(db.DB_PATH)}\n")
-            f.flush()
-    except Exception as e:
-        try:
-            with open(os.path.join(_data_dir, "startup_error.txt"), "w") as f:
-                f.write(f"Error in startup_diagnostic: {str(e)}\n")
-                f.write(traceback.format_exc())
-        except:
-            pass
-
-# Outermost middleware: catch ALL exceptions including in other middleware
-@app.middleware("http")
-async def catch_all_exceptions(request: Request, call_next):
-    """Catch any unhandled exceptions and return traceback as JSON."""
-    try:
-        return await call_next(request)
-    except Exception as e:
-        import traceback
-        log.error(f"UNHANDLED EXCEPTION in middleware: {type(e).__name__}: {str(e)}", exc_info=True)
-        return JSONResponse(
-            {"error": f"Unhandled {type(e).__name__}: {str(e)}", "traceback": traceback.format_exc()},
-            status_code=500
-        )
 
 # Enable CORS for admin panel
 app.add_middleware(
@@ -153,7 +104,7 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
                  "/status", "/healthz", "/health", "/api/health", "/ping",  # Health check endpoints - no auth required
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
-                "/api/recordings/cleanup", "/api/debug/db-path", "/api/dcs", "/api/allowed-numbers"}  # Admin panel data - public read
+                "/api/recordings/cleanup", "/api/dcs", "/api/allowed-numbers"}  # Admin panel data - public read
 PUBLIC_PREFIXES = ("/static/",)  # All admin APIs require auth via @allow("admin") decorator
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
@@ -1379,30 +1330,10 @@ def revoke_upload_token(token_id: int):
 
 
 # ------------------------------------------------------------------ DC (District Coordinator) Management
-@app.get("/api/debug/db-path")
-def debug_db_path():
-    """Debug: show what database path the app is using"""
-    import os
-    return {
-        "EKO_DB_PATH_env": os.environ.get("EKO_DB_PATH", "(not set)"),
-        "db.DB_PATH_actual": db.DB_PATH,
-        "exists": os.path.exists(db.DB_PATH),
-        "size_bytes": os.path.getsize(db.DB_PATH) if os.path.exists(db.DB_PATH) else 0
-    }
-
 @app.get("/api/dcs")
 def list_dcs():
     """List all District Coordinators."""
-    try:
-        result = db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
-        return result
-    except Exception as e:
-        import traceback
-        log.error(f"ERROR in /api/dcs: {type(e).__name__}: {str(e)}", exc_info=True)
-        return JSONResponse(
-            {"error": str(e), "traceback": traceback.format_exc(), "db_path": db.DB_PATH, "db_exists": os.path.exists(db.DB_PATH)},
-            status_code=500
-        )
+    return db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
 
 
 class DCBody(BaseModel):

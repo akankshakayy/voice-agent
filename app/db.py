@@ -4,12 +4,23 @@ import os
 import sqlite3
 import threading
 import time
+import logging
+
+log = logging.getLogger("eko.db")
 
 # DATA_DIR: the writable, persistent folder the deploy platform gives the app (/data); everything else
 # (recordings, voice models, the sign-in secret) is kept next to the database
 DB_PATH = os.environ.get("EKO_DB_PATH") or os.path.join(
     os.environ.get("DATA_DIR") or os.path.join(os.path.dirname(__file__), "..", "data"), "eko_agent.db")
 _lock = threading.RLock()
+
+
+def _raise_unless_duplicate_column(e: sqlite3.OperationalError):
+    """Migrations may race or re-run: an existing column is fine, anything else is a real error."""
+    if "duplicate column name" in str(e).lower():
+        return
+    log.error("Database migration failed: %s", e)
+    raise e
 
 def _ensure_schema():
     """Add missing columns to recordings table if they don't exist."""
@@ -25,13 +36,16 @@ def _ensure_schema():
             if col not in cols:
                 try:
                     conn.execute(f"ALTER TABLE recordings ADD COLUMN {col} {dtype}")
-                except sqlite3.OperationalError:
-                    pass  # Column might already exist or table doesn't exist yet
+                except sqlite3.OperationalError as e:
+                    _raise_unless_duplicate_column(e)
 
         conn.commit()
         conn.close()
-    except Exception as e:
-        pass  # Silently fail - schema will be created on first use
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e).lower():
+            return  # fresh database: conn() creates the full schema on first use
+        log.error("Schema check failed: %s", e)
+        raise
 
 SCHEMA = """
 -- INVARIANT: All recordings and upload_tokens must satisfy mode/ID consistency:
@@ -360,53 +374,37 @@ def conn(retry=True) -> sqlite3.Connection:
             _conn.commit()
         if "report_md" not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
             for col in ("report_md TEXT", "report_error TEXT", "report_at REAL", "report_s REAL", "report_model TEXT"):
-                try:
-                    _conn.execute(f"ALTER TABLE recordings ADD COLUMN {col}")
-                except sqlite3.OperationalError:
-                    pass
+                _conn.execute(f"ALTER TABLE recordings ADD COLUMN {col}")    # the full summary (app/report.py)
             _conn.commit()
         if "timing_json" not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
-            try:
-                _conn.execute("ALTER TABLE recordings ADD COLUMN timing_json TEXT")
-            except sqlite3.OperationalError:
-                pass
+            _conn.execute("ALTER TABLE recordings ADD COLUMN timing_json TEXT")   # how long each step took
             _conn.commit()
         if "stt_json" not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
-            try:
-                _conn.execute("ALTER TABLE recordings ADD COLUMN stt_json TEXT")
-            except sqlite3.OperationalError:
-                pass
+            # Whisper's words and the voice turns, kept so "Process again" doesn't redo the slow, paid parts
+            _conn.execute("ALTER TABLE recordings ADD COLUMN stt_json TEXT")
             _conn.commit()
         if "next_try_at" not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
-            try:
-                _conn.execute("ALTER TABLE recordings ADD COLUMN next_try_at REAL")
-            except sqlite3.OperationalError:
-                pass
+            _conn.execute("ALTER TABLE recordings ADD COLUMN next_try_at REAL")   # when a failed one is retried
             _conn.commit()
         if "simulated" not in {r[1] for r in _conn.execute("PRAGMA table_info(calls)")}:
-            try:
-                _conn.execute("ALTER TABLE calls ADD COLUMN simulated INTEGER DEFAULT 0")
-                _conn.execute("UPDATE calls SET simulated=1")
-            except sqlite3.OperationalError:
-                pass
+            # Simulated calls send no webhook events. Every call so far was a demo or a console test
+            _conn.execute("ALTER TABLE calls ADD COLUMN simulated INTEGER DEFAULT 0")
+            _conn.execute("UPDATE calls SET simulated=1")
         # Phase 4+ migrations: mode, dc_id, employee_id for mode-aware recordings
         for col, dtype in [("mode", "TEXT DEFAULT 'rm'"), ("dc_id", "INTEGER"), ("employee_id", "INTEGER")]:
             if col not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
                 try:
                     _conn.execute(f"ALTER TABLE recordings ADD COLUMN {col} {dtype}")
                     _conn.commit()
-                except sqlite3.OperationalError:
-                    pass
+                except sqlite3.OperationalError as e:
+                    _raise_unless_duplicate_column(e)
             _conn.commit()
         if "role" not in {r[1] for r in _conn.execute("PRAGMA table_info(users)")}:
             # Accounts made before roles existed: the first becomes admin, RM-linked ones RMs, the rest ops
-            try:
-                _conn.execute("ALTER TABLE users ADD COLUMN role TEXT")
-                _conn.execute("""UPDATE users SET role = CASE WHEN id = (SELECT MIN(id) FROM users) THEN 'admin'
-                                 WHEN rm_id IS NOT NULL THEN 'rm' ELSE 'ops' END""")
-                _conn.commit()
-            except sqlite3.OperationalError:
-                pass
+            _conn.execute("ALTER TABLE users ADD COLUMN role TEXT")
+            _conn.execute("""UPDATE users SET role = CASE WHEN id = (SELECT MIN(id) FROM users) THEN 'admin'
+                             WHEN rm_id IS NOT NULL THEN 'rm' ELSE 'ops' END""")
+            _conn.commit()
         _add_columns(_conn, "rms", {"email": "TEXT", "source": "TEXT"}, demo_source=True)
         _add_columns(_conn, "csps", {"shared_phone": "TEXT", "alt_phone": "TEXT", "email": "TEXT", "category": "TEXT",
                                      "state": "TEXT", "lho": "TEXT", "population": "TEXT", "terminal_status": "TEXT",

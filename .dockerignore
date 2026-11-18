@@ -42,3 +42,7 @@ uploader/.gradle/
 # BUT DO INCLUDE database files (needed for production)
 !eko_agent.db
 !data/eko_agent.db
+
+# Secrets and local runtime data never go into the image
+.env
+data/

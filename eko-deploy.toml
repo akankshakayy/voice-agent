@@ -1,0 +1,17 @@
+# eko-deploy configuration (replaces AutoPilot's guessed settings).
+# eko.yml is NOT read by eko-deploy.
+schema = 1
+
+[web]
+build = { context = ".", dockerfile = "Dockerfile" }
+port = 8000
+health_path = "/healthz"
+user = "10001"
+env = { EKO_DB_PATH = "/app/data/eko_agent.db", DATA_DIR = "/app/data", COOKIE_PATH = "/" }
+secrets = ["ADMIN_EMAILS", "APP_BASE_URL", "COOKIE_SECURE", "DEV_MODE", "GOOGLE_CLIENT_ID",
+           "GOOGLE_CLIENT_SECRET", "GROQ_API_KEY", "RECORDINGS_STT_MODEL", "SESSION_SECRET", "TRUST_PROXY"]
+volumes = [{ name = "data", path = "/app/data" }]
+
+[route]
+mode = "strip"
+websocket = false
