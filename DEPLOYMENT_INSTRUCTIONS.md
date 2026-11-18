@@ -25,7 +25,7 @@ This guide walks through deploying the fixed version to production with proper p
 
 ```bash
 ssh -p 2222 akanksha@indev.eko.in
-# When prompted for password, use: EkoBhar@t@189
+# When prompted, enter your SSH password (kept in the local .env as Password=..., never in git)
 ```
 
 ### Step 1B: Create Persistent Storage Directory
