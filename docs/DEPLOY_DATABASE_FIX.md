@@ -40,3 +40,10 @@ if the live table is **empty**, it copies the rows (IDs kept) from the bundled `
 (opened read-only, `immutable=1`). No other table is touched and existing rows are never overwritten;
 on later starts it copies nothing. Tested locally against an existing empty DB with an unrelated row:
 9 + 874 rows seeded, unrelated row kept, restart copied 0.
+
+## Security fix: DC and allowed-number lists required no sign-in
+`GET /api/dcs` and `GET /api/allowed-numbers` were in `PUBLIC_PATHS` (a workaround from Nov 13, when the
+admin page did not yet send its cookie). Anyone with the URL could read all 874 real phone numbers.
+The admin page already sends `credentials: "include"`, so the workaround is not needed: both are removed
+from `PUBLIC_PATHS` and now use `Depends(allow("admin"))`, like `/api/employees`.
+Tested: no sign-in → 401, admin → 200 (9 / 874), ops → 403.

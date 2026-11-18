@@ -110,7 +110,7 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
                  "/status", "/healthz", "/health", "/api/health", "/ping",  # Health check endpoints - no auth required
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
-                "/api/recordings/cleanup", "/api/dcs", "/api/allowed-numbers"}  # Admin panel data - public read
+                "/api/recordings/cleanup"}
 PUBLIC_PREFIXES = ("/static/",)  # All admin APIs require auth via @allow("admin") decorator
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
@@ -1336,7 +1336,7 @@ def revoke_upload_token(token_id: int):
 
 
 # ------------------------------------------------------------------ DC (District Coordinator) Management
-@app.get("/api/dcs")
+@app.get("/api/dcs", dependencies=[Depends(allow("admin"))])
 def list_dcs():
     """List all District Coordinators."""
     return db.q("SELECT id, name, phone, email, region, created_at, active FROM dcs ORDER BY name")
@@ -1374,7 +1374,7 @@ def update_dc(dc_id: int, body: DCBody):
 
 
 # ------------------------------------------------------------------ Allowed Numbers Management
-@app.get("/api/allowed-numbers")
+@app.get("/api/allowed-numbers", dependencies=[Depends(allow("admin"))])
 def list_allowed_numbers(dc_id: int | None = None):
     """List allowed phone numbers. Optionally filter by DC."""
     if dc_id:
