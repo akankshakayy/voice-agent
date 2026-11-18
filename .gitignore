@@ -21,6 +21,5 @@ docs/*.xlsx
 *.db
 *.db-*
 *.sqlite*
-!/eko_agent.db
 evals/synthetic_cases.csv
 .env.local

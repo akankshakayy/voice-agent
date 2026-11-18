@@ -47,3 +47,12 @@ admin page did not yet send its cookie). Anyone with the URL could read all 874 
 The admin page already sends `credentials: "include"`, so the workaround is not needed: both are removed
 from `PUBLIC_PATHS` and now use `Depends(allow("admin"))`, like `/api/employees`.
 Tested: no sign-in → 401, admin → 200 (9 / 874), ops → 403.
+
+## Cleanup (Nov 18)
+- `DEV_MODE` removed from the server (secret unset, dropped from `eko-deploy.toml`). It only made requests from
+  127.0.0.1 act as admin without sign-in (`app/main.py` `require_login`); use it for local dev only.
+- `eko_agent.db` is no longer tracked in git (`*.db` ignored again). The live data is in the persistent `data`
+  volume; the startup seed simply skips when no bundled DB exists. A copy was kept on the server in
+  `~/voice_agent/data/eko_agent.bundled-20261118.db`. The file (real phone numbers) is still in git history.
+- `eko.yml` deleted: eko-deploy never read it; `eko-deploy.toml` is the real config.
+- SSH password removed from `deploy_data.sh` / `DEPLOYMENT_INSTRUCTIONS.md` (still in history: rotate it).
