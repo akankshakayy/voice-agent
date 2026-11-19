@@ -10,5 +10,5 @@ edge-tts>=7.0
 openai>=1.40
 python-multipart>=0.0.9
 numpy>=1.26
-sherpa-onnx>=1.12
+sherpa-onnx>=1.12,<2   # 2.x ships source only; building it needs cmake
 openpyxl>=3.1
