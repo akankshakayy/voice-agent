@@ -59,6 +59,11 @@ async def lifespan(_app):
     except Exception:
         log.exception("Seeding reference data failed")
 
+    try:
+        recordings.requeue_untranscribed()
+    except Exception:
+        log.exception("Re-queueing untranscribed recordings failed")
+
     # Initialize AutoGMap upload queue for rate-limited uploads (max 2 req/sec)
     autogmap.init_upload_queue()
 
@@ -109,8 +114,7 @@ seed_if_demo()
 PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/favicon.ico", "/api/auth/login",
                  "/status", "/healthz", "/health", "/api/health", "/ping",  # Health check endpoints - no auth required
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
-                "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz",
-                "/api/recordings/cleanup"}
+                "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz"}
 PUBLIC_PREFIXES = ("/static/",)  # All admin APIs require auth via @allow("admin") decorator
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
@@ -2034,11 +2038,11 @@ def process_recordings():
     return {"started": True, "waiting": recordings.summary_counts().get("new", 0)}
 
 
-@app.post("/api/recordings/cleanup")
+@app.post("/api/recordings/cleanup", dependencies=[Depends(allow("admin"))])
 def cleanup_recordings():
-    """Remove non-CSP and short recordings, reset failed ones for reprocessing."""
-    threading.Thread(target=recordings.cleanup_invalid_recordings, daemon=True, name="cleanup-recordings").start()
-    return {"started": True, "message": "Cleanup running in background"}
+    """Put every recording that has audio but no transcript back in the queue."""
+    n = recordings.requeue_untranscribed()
+    return {"requeued": n}
 
 
 # ------------------------------------------------------------------ Prachi API (Phase 7: DC recording submission)

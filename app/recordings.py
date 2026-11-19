@@ -1055,38 +1055,17 @@ def process_one(r: dict):
     path = os.path.join(storage_dir(), r["file_path"])
     mode = r.get("mode", "rm")
 
-    # Employee mode: skip transcription, send to Mansi's API + available via PULL endpoint
-    if mode == "employee":
-        db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
-                  summary="Employee recording - no transcription", transcript_json=[], is_csp_call=0)
-        log.info(f"Employee recording {r['id']} marked done (no transcription)")
-        # PUSH the audio to Mansi's AutoGMap (rate-limited queue; skipped if the number isn't an applicant)
+    # Every recording with audio is transcribed; employee audio is also pushed to Mansi's AutoGMap
+    if mode == "employee" and not r.get("autogmap_status"):
         queue_autogmap_upload(r["id"], r["file_path"], r.get("other_number") or "", r.get("direction") or "",
                               int(r.get("duration_sec") or 0), started_at=r.get("started_at"))
-        return
-
-    # Legacy DC call type support (backward compat)
-    if r.get("call_type") == "dc":
-        db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
-                  summary="DC call - no transcription", transcript_json=[], is_csp_call=0)
-        integrations.recording_processed(r["id"])
-        log.info(f"DC call {r['id']} marked done (no transcription)")
-        return
-
-    # Skip if duration < 2 seconds (too short)
-    if r.get("duration_sec") and r["duration_sec"] < 2:
-        db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
-                  summary="Recording too short (< 2 seconds)", is_csp_call=0, transcript_json=[])
-        return
-
-    # Validate CSP: only transcribe if csp_id is set (calling number matches CSP in sheet)
-    if not r.get("csp_id"):
-        db.update("recordings", r["id"], status="done", processed_at=time.time(), attempts=r["attempts"] + 1,
-                  summary="Calling number not in CSP list", is_csp_call=0, transcript_json=[])
-        return
 
     # A transcript a person corrected or checked is reviewed as it stands: transcribing again would undo their work
     corrected = json.loads(r["transcript_json"] or "[]") if r.get("transcript_edited_at") or r.get("checked_at") else None
+    if corrected is None and not os.path.exists(path):
+        db.update("recordings", r["id"], status="failed", attempts=r["attempts"] + 1,
+                  error="Audio file is missing on the server")
+        return
     cache = _transcribe(r, path) if corrected is None else json.loads(r.get("stt_json") or "null") or {}
     fresh_stt = cache.get("transcribe_at", 0) >= started
     t1 = time.perf_counter()
@@ -1425,20 +1404,19 @@ def _draft_row(r: dict, lines: list[dict], cols: list[str], case_id: str) -> dic
     return row
 
 
-def cleanup_invalid_recordings() -> dict:
-    """Remove recordings that don't match CSPs or are too short, and reset failed ones for reprocessing."""
-    # Delete recordings without CSP match (calling number not in calling sheet)
-    deleted_no_csp = db.x("DELETE FROM recordings WHERE csp_id IS NULL AND status='done'")
-
-    # Delete recordings < 2 seconds
-    deleted_short = db.x("DELETE FROM recordings WHERE duration_sec < 2 AND status='done'")
-
-    # Reset failed recordings so they retry
-    reset_failed = db.x("UPDATE recordings SET status='new', error=NULL, attempts=0 WHERE status='failed'")
-
-    log.info("Cleaned up: %d recordings without CSP, %d short recordings, %d failed reset",
-             deleted_no_csp, deleted_short, reset_failed)
-    return {"deleted_no_csp": deleted_no_csp, "deleted_short": deleted_short, "reset_failed": reset_failed}
+def requeue_untranscribed() -> int:
+    """Recordings skipped by older rules (non-CSP number, under 2 s, employee/DC) or given up on, whose audio is
+    still here, go back in the queue to be transcribed."""
+    rows = db.q("""SELECT id, file_path FROM recordings
+                   WHERE (transcript_json IS NULL OR transcript_json IN ('', '[]'))
+                     AND ((status='done' AND stt_json IS NULL) OR status='failed')""")
+    ids = [r["id"] for r in rows if os.path.exists(os.path.join(storage_dir(), r["file_path"]))]
+    for i in ids:
+        db.update("recordings", i, status="new", attempts=0, error=None, next_try_at=None)
+    if ids:
+        log.warning("Re-queued %d recording(s) with audio but no transcript", len(ids))
+        wake()
+    return len(ids)
 
 
 # ---------------------------------------------------------------- command line
@@ -1457,7 +1435,7 @@ def _cli():
     pr.add_argument("--limit", type=int)
     sub.add_parser("list", help="list recordings")
     sub.add_parser("export", help="draft scorecard cases -> evals/candidates.csv")
-    sub.add_parser("cleanup", help="remove non-CSP and short recordings, reset failed ones")
+    sub.add_parser("cleanup", help="re-queue every recording that has audio but no transcript")
     a = p.parse_args()
     from .logging_config import setup_logging
     setup_logging("eko.recordings")
@@ -1483,9 +1461,7 @@ def _cli():
     elif a.cmd == "export":
         print(f"Added or filled in {export_candidates()} draft case(s) in evals/candidates.csv")
     elif a.cmd == "cleanup":
-        result = cleanup_invalid_recordings()
-        print(f"Cleanup complete: {result['deleted_no_csp']} non-CSP recordings deleted, "
-              f"{result['deleted_short']} short recordings deleted, {result['reset_failed']} failed recordings reset")
+        print(f"Re-queued {requeue_untranscribed()} recording(s) for transcription")
 
 
 if __name__ == "__main__":
