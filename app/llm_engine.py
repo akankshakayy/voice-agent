@@ -6,6 +6,7 @@ action. The orchestrator (agent.py) applies hard safety rules on top.
 """
 import json
 import os
+import shutil
 import time
 
 from . import misheard, spoken
@@ -348,7 +349,9 @@ def provider() -> str | None:
         return want if os.environ.get(keys[want]) else None
     # auto: try claude-code first (no key needed), then others with keys
     if want == "auto":
-        providers = ["claude-code"] + [p for p, env in keys.items() if os.environ.get(env)]
+        # The server image has no Claude Code CLI; picking it there made every LLM call fail
+        cli = ["claude-code"] if shutil.which("claude") else []
+        providers = cli + [p for p, env in keys.items() if os.environ.get(env)]
         return next(iter(providers), None)
     return None
 
