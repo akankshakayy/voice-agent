@@ -8,19 +8,22 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import okio.source
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/** The two Sahayak endpoints the app uses: /api/uploader/ping and /api/uploader/recordings. */
+/** The Sahayak endpoints the app uses: /api/uploader/ping, /api/uploader/consent (DC) and /api/uploader/recordings. */
 class Api(private val serverUrl: String, private val token: String) {
 
     sealed class Upload {
         data class Ok(val id: Long, val duplicate: Boolean) : Upload()
         /** Bad token: stop the whole run, nothing will succeed until the token is fixed. */
         data class Unauthorized(val detail: String) : Upload()
+        /** DC phone without a valid consent: stop the run and ask for consent again; the file is kept. */
+        data class ConsentNeeded(val detail: String) : Upload()
         /** 400 / 413: this file will never be accepted; skip it for good. */
         data class Rejected(val code: Int, val detail: String) : Upload()
         /** Network or 5xx: try again on the next run. */
@@ -78,6 +81,18 @@ class Api(private val serverUrl: String, private val token: String) {
         }
     }
 
+    /** DC phones: record the DC's consent on the server and get the token every upload must carry. */
+    fun giveConsent(): String {
+        val req = Request.Builder().url("$serverUrl/api/uploader/consent").header("Authorization", "Bearer $token")
+            .post(ByteArray(0).toRequestBody(null)).build()
+        client.newCall(req).execute().use { r ->
+            val body = r.body?.string().orEmpty()
+            if (r.code == 401) throw IOException("Token rejected: ${detail(body)}")
+            if (!r.isSuccessful) throw IOException("Server said ${r.code}: ${detail(body)}")
+            return JSONObject(body).getString("consent_token")
+        }
+    }
+
     fun upload(resolver: ContentResolver, file: RecFile, call: CallEntry, deviceId: String, rmId: Int,
                mode: String = "rm", dcId: Int = -1, employeeId: Int = -1, consentToken: String = ""): Upload {
         val audio = object : RequestBody() {
@@ -115,6 +130,7 @@ class Api(private val serverUrl: String, private val token: String) {
                 when {
                     r.isSuccessful -> JSONObject(body).let { Upload.Ok(it.optLong("id"), it.optBoolean("duplicate")) }
                     r.code == 401 -> Upload.Unauthorized(detail(body))
+                    r.code == 403 -> Upload.ConsentNeeded(detail(body))
                     r.code == 400 || r.code == 413 -> Upload.Rejected(r.code, detail(body))
                     else -> Upload.Retry("Server said ${r.code}: ${detail(body)}")
                 }

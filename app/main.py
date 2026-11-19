@@ -116,7 +116,7 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz"}
 PUBLIC_PREFIXES = ("/static/",)  # All admin APIs require auth via @allow("admin") decorator
-DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings"}   # the uploader app: upload token, not a login
+DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings", "/api/uploader/consent"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
 PAGE_ROLES = {"/": ("admin", "ops", "rm"), "/call": STAFF, "/ops": STAFF, "/harness": STAFF, "/rm": ("admin", "ops", "rm"),
               "/users": ("admin",), "/recordings": ("admin", "ops", "rm"), "/account": ("admin", "ops", "rm", "pending"),
@@ -1260,7 +1260,7 @@ def uploader_ping(device=Depends(_device)):
             "dc_id": device.get("dc_id", -1),
             "dc_name": device.get("dc_name", ""),
             "allowed_numbers": recordings.get_allowed_numbers(device.get("dc_id", -1)) if device.get("dc_id") else [],
-            "consent_required": not device.get("consent_token")
+            "consent_required": True
         })
     elif mode == "employee":
         result.update({
@@ -1269,6 +1269,14 @@ def uploader_ping(device=Depends(_device)):
         })
 
     return result
+
+
+@app.post("/api/uploader/consent")
+def uploader_consent(device=Depends(_device)):
+    """DC phones only: the DC ticked consent in the app. Returns the consent token the app sends with each upload."""
+    if device.get("mode") != "dc" or not device.get("dc_id"):
+        raise HTTPException(400, "Consent is only needed on DC phones")
+    return {"consent_token": recordings.give_dc_consent(device["dc_id"])}
 
 
 @app.post("/api/uploader/recordings")
@@ -1300,7 +1308,10 @@ def uploader_upload(audio: UploadFile = File(...), started_at: int | None = Form
         elif mode == "dc":
             if not device.get("dc_id"):
                 raise ValueError("DC token must have dc_id")
-            device = {**device, "consent_token": consent_token or ""}
+            if not recordings.validate_dc_consent(device["dc_id"], consent_token or ""):
+                raise HTTPException(403, "No valid DC consent on this phone. Open the app, tap Test connection, "
+                                         "tick the consent box and Save.")
+            device = {**device, "consent_token": consent_token}
         elif mode == "employee":
             if not device.get("employee_id"):
                 raise ValueError("Employee token must have employee_id")

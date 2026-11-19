@@ -132,11 +132,11 @@
                         android:id="@+id/consent"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="I consent to share recordings"
+                        android:text="I agree to share recordings of my Eko-SIM calls with the numbers above"
                         android:textColor="@color/text_primary" />
                     <TextView
                         style="@style/Hint"
-                        android:text="Required for data sharing" />
+                        android:text="Needed once on a DC phone. Only calls with the allowed numbers are uploaded." />
                 </LinearLayout>
             </LinearLayout>
 

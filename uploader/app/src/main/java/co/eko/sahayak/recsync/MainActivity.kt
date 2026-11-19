@@ -51,6 +51,10 @@ class MainActivity : Activity() {
         showFolder()
         if (s.rmId > 0) showRms(listOf(s.rmId to s.rmName), s.rmLocked)    // until Test connection reloads the list
         else showRms(emptyList(), false)
+        when (s.mode) {
+            "dc" -> if (s.dcId > 0) showMode("dc", s.dcName, s.allowedNumbers.sorted(), true)
+            "employee" -> if (s.employeeId > 0) showMode("employee", s.employeeName, emptyList(), false)
+        }
 
         findViewById<Button>(R.id.test).setOnClickListener { testConnection() }
         findViewById<Button>(R.id.pick_folder).setOnClickListener {
@@ -120,11 +124,14 @@ class MainActivity : Activity() {
                             showMode("rm", null, emptyList(), false)
                         }
                         "dc" -> {
+                            if (s.dcId != p.dcId) s.consentToken = ""   // consent belongs to one DC
+                            s.dcId = p.dcId
                             showRms(emptyList(), true)
                             showMode("dc", p.dcName, p.allowedNumbers, p.consentRequired)
                             testResult.text = "Connected. DC Mode: ${p.dcName}. Will fetch calls from allowed numbers."
                         }
                         "employee" -> {
+                            s.employeeId = p.employeeId
                             showRms(emptyList(), true)
                             showMode("employee", p.employeeName, emptyList(), false)
                             testResult.text = "Connected. Employee Mode: ${p.employeeName}. All recordings will be uploaded."
@@ -171,7 +178,7 @@ class MainActivity : Activity() {
 
                 if (consentRequired) {
                     consentContainer.visibility = android.view.View.VISIBLE
-                    consentCheckbox.isChecked = false
+                    consentCheckbox.isChecked = s.consentToken.isNotEmpty()
                 } else {
                     consentContainer.visibility = android.view.View.GONE
                 }
@@ -205,17 +212,23 @@ class MainActivity : Activity() {
                 s.rmName = rm.second
             }
             "dc" -> {
-                if (consentContainer.visibility == android.view.View.VISIBLE && !consentCheckbox.isChecked) {
-                    return toast("You must consent to share recordings for DC mode")
-                }
-                // Generate or retrieve consent token (in real implementation, get from server)
+                if (s.dcId <= 0) return toast("Tap Test connection first")
+                if (!consentCheckbox.isChecked) return toast("Tick the consent box to share this phone's call recordings")
                 if (s.consentToken.isEmpty()) {
-                    s.consentToken = java.util.UUID.randomUUID().toString()
+                    val tok = token.text.toString().trim()
+                    toast("Saving consent…")
+                    io.execute {
+                        try {
+                            val consent = Api(url, tok).giveConsent()
+                            runOnUiThread { s.consentToken = consent; save() }
+                        } catch (e: Exception) {
+                            runOnUiThread { toast("Couldn't save consent: ${e.message}") }
+                        }
+                    }
+                    return
                 }
             }
-            "employee" -> {
-                // No additional validation needed
-            }
+            "employee" -> if (s.employeeId <= 0) return toast("Tap Test connection first")
         }
 
         s.serverUrl = url

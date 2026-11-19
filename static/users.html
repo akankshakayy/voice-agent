@@ -199,12 +199,12 @@ function updateEntityDropdown() {
     options += `<option value="">Any RM (they choose their name in the app)</option>`;
   } else if (mode === "dc") {
     entities = DCS;
-    options = DCS.map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.region || "")}</option>`).join("");
-    options += `<option value="">Any DC (they choose their name in the app)</option>`;
+    options = DCS.map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.region || "")}</option>`).join("")
+      || `<option value="" disabled selected>Add a DC first</option>`;
   } else if (mode === "employee") {
     entities = EMPLOYEES;
-    options = EMPLOYEES.map(e => `<option value="${e.id}">${esc(e.name)} · ${esc(e.department || "")}</option>`).join("");
-    options += `<option value="">Any Employee (they choose their name in the app)</option>`;
+    options = EMPLOYEES.map(e => `<option value="${e.id}">${esc(e.name)} · ${esc(e.department || "")}</option>`).join("")
+      || `<option value="" disabled selected>Add an employee first</option>`;
   }
 
   entitySelect.innerHTML = options;
@@ -217,6 +217,7 @@ $("tokcreate").onclick = async () => {
     const mode = $("tokmode").value;
     const entity = $("tokentity").value;
     const entityId = entity ? Number(entity) : null;
+    if (mode !== "rm" && !entityId) return alert(`Choose the ${mode === "dc" ? "DC" : "employee"} this phone belongs to`);
 
     const body = { label: $("toklabel").value };
     if (mode === "rm") {

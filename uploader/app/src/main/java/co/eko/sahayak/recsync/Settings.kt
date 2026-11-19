@@ -57,7 +57,7 @@ class Settings(context: Context) {
         get() = prefs.getString("employee_name", "") ?: ""
         set(v) = prefs.edit().putString("employee_name", v).apply()
 
-    /** DC mode: one-time consent token (encrypted) */
+    /** DC mode: consent token issued by the server when the DC ticks consent (encrypted) */
     var consentToken: String
         get() = secure.getString("consent_token", "") ?: ""
         set(v) = secure.edit().putString("consent_token", v).apply()
@@ -107,8 +107,12 @@ class Settings(context: Context) {
         e.apply()
     }
 
-    val isConfigured get() = serverUrl.isNotEmpty() && token.isNotEmpty() && rmId > 0 && ekoAccountIds.isNotEmpty() &&
-        folderUri.isNotEmpty()
+    val isConfigured get() = serverUrl.isNotEmpty() && token.isNotEmpty() && ekoAccountIds.isNotEmpty() &&
+        folderUri.isNotEmpty() && when (mode) {
+            "dc" -> dcId > 0 && consentToken.isNotEmpty()
+            "employee" -> employeeId > 0
+            else -> rmId > 0
+        }
 
     // ---- last run status
     fun saveStatus(s: RunStatus) = prefs.edit()

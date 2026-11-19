@@ -99,13 +99,13 @@ def create_token(rm_id: int | None = None, dc_id: int | None = None, employee_id
 
     # Validate that exactly one ID is provided (or rm_id is None for shared RM token)
     ids_provided = sum(1 for id_ in [rm_id, dc_id, employee_id] if id_ is not None)
-    if ids_provided == 0:
-        raise ValueError("Must provide rm_id, dc_id, or employee_id")
     if ids_provided > 1:
         raise ValueError("Provide only one of rm_id, dc_id, or employee_id")
 
     # Determine mode and validate entity exists
-    if rm_id is not None:
+    if ids_provided == 0:
+        mode = "rm"     # shared RM token
+    elif rm_id is not None:
         if not db.q("SELECT id FROM rms WHERE id=?", (rm_id,), one=True):
             raise ValueError("No such RM")
         mode = "rm"
@@ -175,12 +175,25 @@ def get_allowed_numbers(dc_id: int) -> list[str]:
     return [r["phone_number"] for r in rows]
 
 
+def _phone_tail(number: str | None) -> str:
+    """Last 10 digits: '+91 98765 43210', '09876543210' and '9876543210' are the same number."""
+    return "".join(ch for ch in (number or "") if ch.isdigit())[-10:]
+
+
 def is_allowed_number(dc_id: int, phone_number: str) -> bool:
     """Check if a phone number is in the DC's allowed list."""
-    if not phone_number:
+    tail = _phone_tail(phone_number)
+    if not tail:
         return False
-    allowed = db.q("SELECT id FROM allowed_numbers WHERE dc_id=? AND phone_number=?", (dc_id, phone_number), one=True)
-    return bool(allowed)
+    rows = db.q("SELECT phone_number FROM allowed_numbers WHERE dc_id=? AND COALESCE(active, 1)=1", (dc_id,))
+    return any(_phone_tail(r["phone_number"]) == tail for r in rows)
+
+
+def give_dc_consent(dc_id: int) -> str:
+    """The DC agreed in the app to share their call recordings. The app sends this token with every upload."""
+    token = "ekoct_" + secrets.token_urlsafe(24)
+    db.x("INSERT INTO dc_consents(dc_id, consented_at, consent_token) VALUES(?,?,?)", (dc_id, time.time(), token))
+    return token
 
 
 def validate_dc_consent(dc_id: int, consent_token: str) -> bool:

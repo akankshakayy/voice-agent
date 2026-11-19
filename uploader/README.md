@@ -31,8 +31,17 @@ summarized for training and scoring the agent.
 
 | Call | Purpose |
 |---|---|
-| `GET /api/uploader/ping` with `Authorization: Bearer <token>` | Test connection: the RM a personal token belongs to, or the RMs to choose from |
-| `POST /api/uploader/recordings` (multipart) | Fields: `audio`, `started_at` (epoch ms), `duration_sec`, `direction` (`incoming` / `outgoing` / `unknown`), `other_number`, `device_id` |
+| `GET /api/uploader/ping` with `Authorization: Bearer <token>` | Test connection: the token's mode (`rm` / `dc` / `employee`), whose phone it is (or the RMs to choose from), and for DC phones the allowed numbers |
+| `POST /api/uploader/consent` | DC phones only: records the DC's consent and returns the `consent_token` every DC upload must carry |
+| `POST /api/uploader/recordings` (multipart) | Fields: `audio`, `started_at` (epoch ms), `duration_sec`, `direction` (`incoming` / `outgoing` / `unknown`), `other_number`, `device_id`, `mode`, plus `rm_id` (RM) or `consent_token` (DC). A DC upload without a valid consent gets 403 |
+
+## Modes
+
+| Token made for | What the phone uploads | Extra setup step |
+|---|---|---|
+| An RM (or "Any RM") | Every Eko-SIM call | Pick the RM's name |
+| A DC | Only Eko-SIM calls with the DC's **allowed numbers** (matched on the last 10 digits, refreshed before each run) | Tick the consent box once, then Save |
+| An employee | Every Eko-SIM call; the server sends them to AutoGMap | None |
 
 ## Pilot setup (per RM phone)
 
@@ -53,6 +62,8 @@ summarized for training and scoring the agent.
    "Restricted setting", go to App info › ⋮ › **Allow restricted settings**, then open the app again.
 4. Enter the server address and paste the token, then tap **Test connection**. Under **2. Your name (RM)** pick
    the RM (a personal token shows its RM's name, locked). Every recording from the phone is filed under that name.
+   A DC or employee token shows their name instead; on a DC phone, tick the consent box (Save asks the server
+   for the consent, so the phone must be online).
 5. Pick the **Eko SIM**. Tap **Choose folder** and open the dialer's recordings folder (the app lists the usual
    locations), then tap **Use this folder › Allow**.
 6. Tap **Save and start uploading**, then **Upload now** once. The status should show the test call as uploaded.

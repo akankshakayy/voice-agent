@@ -54,6 +54,11 @@ class UploadWorker(context: Context, params: WorkerParameters) : Worker(context,
         }
         val calls = Device.calls(applicationContext, since - Settings.DAY_MS)
         val api = Api(s.serverUrl, s.token)
+        // A skipped file is never looked at again, so fetch numbers the admin added since setup before deciding
+        if (s.mode == "dc") try { s.allowedNumbers = api.ping().allowedNumbers.toSet() } catch (e: Exception) {
+            error = "Can't reach the server: ${e.message}"; return finish(Result.retry())
+        }
+        val allowedTails = s.allowedNumbers.map(Matcher::tail).toSet()
 
         // Initialize AutoGMap for RM number validation (optional, gracefully degrades if disabled)
         val autoGMapApiKey = System.getenv("AUTOGMAP_API_KEY") ?: ""
@@ -94,7 +99,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : Worker(context,
                 call == null && age < CALL_LOG_LAG_MS -> { blocked = true; continue }   // call log may lag
                 call == null -> "skip: no matching call"
                 !Matcher.isEkoSim(call.accountId, s.ekoAccountIds) -> "skip: not the Eko SIM"
-                s.mode == "dc" && !s.allowedNumbers.contains(call.number) -> "skip: number not in DC allowed list"
+                s.mode == "dc" && Matcher.tail(call.number) !in allowedTails -> "skip: number not in DC allowed list"
                 // AutoGMap validation for RM mode (if enabled)
                 s.mode == "rm" && autoGMap != null && !autoGMap.isValidNumber(call.number) ->
                     "skip: RM number ${call.number} not in AutoGMap"
@@ -125,6 +130,11 @@ class UploadWorker(context: Context, params: WorkerParameters) : Worker(context,
                         is Api.Upload.Rejected -> "rejected ${uploadResult.code}: ${uploadResult.detail}"
                         is Api.Upload.Unauthorized -> {
                             error = "Token rejected: ${uploadResult.detail}. Ask the Sahayak admin for a new token."
+                            return finish(Result.failure())
+                        }
+                        is Api.Upload.ConsentNeeded -> {
+                            s.consentToken = ""
+                            error = uploadResult.detail
                             return finish(Result.failure())
                         }
                         is Api.Upload.Retry -> { error = uploadResult.detail; retry = true; break }
