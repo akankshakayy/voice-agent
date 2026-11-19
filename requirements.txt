@@ -6,6 +6,7 @@ imageio-ffmpeg>=0.5
 pydantic>=2.6
 pytest>=8.0
 httpx>=0.27
+requests>=2.31
 edge-tts>=7.0
 openai>=1.40
 python-multipart>=0.0.9

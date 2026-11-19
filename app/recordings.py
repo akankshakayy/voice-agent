@@ -1141,8 +1141,12 @@ def process_one(r: dict):
     if mode in ("rm", "dc"):
         # Fetch updated recording for Prachi
         rec_updated = db.q("SELECT * FROM recordings WHERE id=?", (r["id"],), one=True)
-        if not send_to_prachi_api(rec_updated):
-            log.warning(f"Failed to send {mode.upper()} recording {r['id']} to Prachi API; will retry on next run")
+        # The review is already saved: a hand-off error must not fail the recording and re-run the (paid) review
+        try:
+            if not send_to_prachi_api(rec_updated):
+                log.warning(f"Failed to send {mode.upper()} recording {r['id']} to Prachi API; will retry on next run")
+        except Exception:
+            log.exception("Prachi hand-off failed for recording %d", r["id"])
 
 
 def _write_summary(rec_id: int):
