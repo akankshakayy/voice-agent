@@ -317,6 +317,8 @@ class AutoGMapClient:
                 )
                 try:
                     resp_data = response.json()
+                    log.info("AutoGMap reply: our recording_id=%s -> their recording_id=%s, status=%s",
+                             recording_id, resp_data.get("recording_id"), resp_data.get("status"))
                     return True, "uploaded", {
                         "recording_id": resp_data.get("recording_id"),
                         "status": resp_data.get("status", "accepted"),
