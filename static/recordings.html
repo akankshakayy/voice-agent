@@ -116,11 +116,11 @@
       <select id="fEmployee" hidden><option value="">All employees</option></select>
       <input id="fDateFrom" type="date" placeholder="From date">
       <input id="fDateTo" type="date" placeholder="To date">
-      <input id="fSearch" placeholder="Search CSP, number, summary, transcript…">
+      <input id="fSearch" placeholder="Search #recording, CSP, number, summary…">
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Call time</th><th id="actorHeader">RM</th><th>CSP</th><th>Length</th><th>Issue</th><th>Status</th><th>From</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+      <thead><tr><th class="num">#</th><th>Call time</th><th id="actorHeader">RM</th><th>CSP</th><th>Length</th><th>Issue</th><th>Status</th><th>From</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
     </table></div>
   </section>
 
@@ -188,6 +188,7 @@ const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
     await refresh();
     const id = Number(location.hash.slice(1));
     if (id) openRec(id);
+    window.addEventListener("hashchange", () => { const n = Number(location.hash.slice(1)); if (n) openRec(n); });
   } catch (e) {
     console.error("Recordings page init failed:", e);
     toast("Error loading page: " + (e.message || String(e)));
@@ -292,7 +293,8 @@ function render() {
     if (cat && (r.intent || "unknown") !== cat) return false;
     if (rm && String(r.rm_id) !== rm) return false;
     if (emp && String(r.employee_id) !== emp) return false;
-    if (q && !JSON.stringify([r.csp_name, r.csp_code, r.other_number, r.summary, r.orig_name, r.rm_name, r.employee_id]).toLowerCase().includes(q)) return false;
+    const idQ = /^#?\d+$/.test(q.trim()) ? Number(q.trim().replace("#", "")) : null;
+    if (q && r.id !== idQ && !JSON.stringify([r.csp_name, r.csp_code, r.other_number, r.summary, r.orig_name, r.rm_name, r.employee_id]).toLowerCase().includes(q)) return false;
 
     // Date filtering: check if recording date falls within the selected range
     const recTime = new Date((r.started_at || r.uploaded_at) * 1000);
@@ -313,6 +315,7 @@ function render() {
     }
 
     return `<tr class="clickable" onclick="openRec(${r.id})">
+      <td class="num mono muted">${r.id}</td>
       <td class="nowrap">${fmtTime(r.started_at || r.uploaded_at)}<div class="small muted">${r.direction === "incoming" ? "Incoming" : r.direction === "outgoing" ? "Outgoing" : ""}</div></td>
       <td>${caller}</td>
       <td>${who(r)}${r.csp_code ? `<div class="small muted">${esc(r.csp_code)}</div>` : ""}</td>
@@ -323,7 +326,7 @@ function render() {
         ${st === "check" && sureness(r) != null ? `<div class="sure">Machine ${Math.round(sureness(r) * 100)}% sure</div>` : ""}</td>
       <td><span class="badge ${r.source === "phone" ? "b-accent" : ""}">${r.source === "phone" ? "Phone app" : "Added by hand"}</span></td></tr>`;
   }).join("")
-    : `<tr><td colspan="7" class="empty">${st === "check" && !cat && !rm && !emp && !q ? "Nothing to check: every processed call has been checked" : ROWS.length ? "No recordings match" : "No recordings yet. They appear here as phones upload them" + (STAFF ? ", or add some above." : ".")}</td></tr>`;
+    : `<tr><td colspan="8" class="empty">${st === "check" && !cat && !rm && !emp && !q ? "Nothing to check: every processed call has been checked" : ROWS.length ? "No recordings match" : "No recordings yet. They appear here as phones upload them" + (STAFF ? ", or add some above." : ".")}</td></tr>`;
 }
 
 async function openRec(id) {
@@ -349,7 +352,7 @@ async function openRec(id) {
   }
 
   $("drawer").innerHTML = `<div class="drawer-head"><div><h2>${who(r)}</h2>
-      <div class="sub">${fmtTime(r.started_at || r.uploaded_at)} · ${actorName} · ${fmtDur(r.duration_sec)}</div></div>
+      <div class="sub">Recording #${r.id} · ${fmtTime(r.started_at || r.uploaded_at)} · ${actorName} · ${fmtDur(r.duration_sec)}</div></div>
       <div style="display:flex;gap:8px">${checkQueue().some(x => x.id !== r.id) ? `<button class="secondary" onclick="nextToCheck()">Next call to check →</button>` : ""}
       <button class="secondary" onclick="closeDrawer()">Close</button></div></div>
     <audio id="player" controls preload="metadata" src="api/recordings/${r.id}/audio"></audio>
