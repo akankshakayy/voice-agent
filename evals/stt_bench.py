@@ -197,6 +197,41 @@ def score():
     json.dump(rows, open(os.path.join(BENCH, "scores.json"), "w"), indent=1)
 
 
+def compare():
+    """data/stt_bench/compare.html: every engine's transcript of each call side by side, with the call's audio.
+    Opened from disk, so nothing is published."""
+    import html
+    cols = [("Live site now", lambda r: os.path.join(BENCH, "whisper_before", f"{r}.json"))]
+    cols += [(n, lambda r, e=e: out_path(e, r)) for e, n in (("whisper", "Whisper + local voices"), ("sarvam", "Sarvam"))]
+    calls = []
+    for rid in ids():
+        panes = []
+        for name, path in cols:
+            p = path(rid)
+            rows = json.load(open(p))["transcript"] if os.path.exists(p) else []
+            body = "".join(f'<div class="l {html.escape(l.get("speaker") or "unknown")}"><span class="t">'
+                           f'{int(l["start"] // 60)}:{int(l["start"] % 60):02d}</span><b>{html.escape((l.get("speaker") or "?").upper())}</b> '
+                           f'{html.escape(l["text"])}</div>' for l in rows) or '<div class="muted">No transcript</div>'
+            panes.append(f'<section><h3>{name} <small>{len(rows)} lines, {sum(len(l["text"].split()) for l in rows)} words</small></h3>{body}</section>')
+        calls.append(f'<article id="c{rid}"><h2>Recording #{rid} <a href="{SITE}/recordings#{rid}" target="_blank">open on site</a></h2>'
+                     f'<audio controls preload="none" src="audio/{rid}.mp3"></audio><div class="grid">{"".join(panes)}</div></article>')
+    nav = " ".join(f'<a href="#c{r}">#{r}</a>' for r in ids())
+    page = f"""<!doctype html><meta charset="utf-8"><title>Transcript comparison</title><style>
+body{{font:14px/1.5 system-ui,sans-serif;margin:0;padding:16px;background:#fafafa;color:#222}}
+nav{{position:sticky;top:0;background:#fafafa;padding:8px 0;border-bottom:1px solid #ddd;z-index:1}} nav a{{margin-right:8px}}
+article{{margin:24px 0}} audio{{width:100%;max-width:600px}}
+.grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}} @media(max-width:900px){{.grid{{grid-template-columns:1fr}}}}
+section{{background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px}} h3{{margin:0 0 8px;font-size:15px}} small{{color:#888;font-weight:normal}}
+.l{{padding:3px 6px;border-left:3px solid #ccc;margin:2px 0}} .rm{{border-color:#2b6cb0;background:#ebf4ff}} .csp{{border-color:#c05621;background:#fff5eb}}
+.other{{border-color:#6b46c1}} .t{{color:#999;font-size:12px;margin-right:6px}} .muted{{color:#999}}
+</style><h1>Transcript comparison</h1><p>Blue = RM, orange = CSP. Correct the live site from what you <b>hear</b>, not by copying any column.</p>
+<nav>{nav}</nav>{"".join(calls)}"""
+    out = os.path.join(BENCH, "compare.html")
+    open(out, "w").write(page)
+    print(out)
+
+
 if __name__ == "__main__":
     cmd, *rest = sys.argv[1:] or ["help"]
-    {"run": lambda: run(rest or list(ENGINES)), "fetch": fetch, "score": score}.get(cmd, lambda: print(__doc__))()
+    {"run": lambda: run(rest or list(ENGINES)), "fetch": fetch, "score": score,
+     "compare": compare}.get(cmd, lambda: print(__doc__))()

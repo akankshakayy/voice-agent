@@ -37,6 +37,7 @@ Scoring converts the engines' Devanagari to English letters and folds spellings 
 
 ```bash
 python -m evals.stt_bench run sarvam whisper   # transcribe; cached per engine and call
+python -m evals.stt_bench compare              # data/stt_bench/compare.html: all transcripts side by side + audio
 python -m evals.stt_bench fetch                # pull checked transcripts (SAHAYAK_SESSION cookie in .env)
 python -m evals.stt_bench score                # word errors, letter errors, wrong-speaker share per engine
 ```
