@@ -128,7 +128,8 @@
       <input id="fDateTo" type="date" placeholder="To date">
       <input id="fSearch" placeholder="Search #recording, CSP, number, summary…">
     </div>
-    <div class="table-wrap"><table>
+    <button type="button" class="secondary" id="listToggle" aria-expanded="false" aria-controls="listWrap" onclick="toggleList()">▸ View all recordings</button>
+    <div class="table-wrap" id="listWrap" hidden style="margin-top:12px"><table>
       <thead><tr><th class="num">#</th><th>Call time</th><th id="actorHeader">RM</th><th>CSP</th><th>Length</th><th>Issue</th><th>Status</th><th>From</th></tr></thead>
       <tbody id="rows"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
     </table></div>
@@ -199,7 +200,8 @@ const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
     }
     ["fStatus", "fCat", "fRm", "fEmployee", "fDateFrom", "fDateTo"].forEach(id => $(id).onchange = render);
     ["fRm", "fEmployee", "fDateFrom", "fDateTo"].forEach(id => $(id).addEventListener("change", loadMetrics));
-    $("fSearch").oninput = render;
+    $("fSearch").oninput = () => { if ($("fSearch").value.trim()) toggleList(true); render(); };
+    $("fStatus").addEventListener("change", () => { if ($("fStatus").value) toggleList(true); });
     $("drawerBg").onclick = closeDrawer;
     $("uploadForm").onsubmit = upload;
     await refresh();
@@ -302,6 +304,7 @@ function setMode(mode) {
 }
 
 function render() {
+  if ($("listWrap").hidden) toggleList(false);           // keep the count on the closed button current
   const st = $("fStatus").value, cat = $("fCat").value, rm = $("fRm").value, emp = $("fEmployee").value, q = $("fSearch").value.toLowerCase();
   const dateFrom = $("fDateFrom").value ? (() => { const d = new Date($("fDateFrom").value); d.setHours(0, 0, 0, 0); return d; })() : null;
   const dateTo = $("fDateTo").value ? (() => { const d = new Date($("fDateTo").value); d.setHours(23, 59, 59, 999); return d; })() : null;
@@ -513,6 +516,14 @@ async function blockPair(k, blocked) {
     toast(blocked ? "Kept out of the prompts" : "Allowed back into the prompts"); loadLearning();
   } catch (e) { toast(errText(e)); }
 }
+// ---- the list of calls opens and closes; it starts closed so the metrics are seen first
+function toggleList(open) {
+  const wrap = $("listWrap"), show = open ?? wrap.hidden;
+  wrap.hidden = !show;
+  $("listToggle").setAttribute("aria-expanded", String(show));
+  $("listToggle").textContent = show ? "▾ Hide recordings" : `▸ View all recordings (${num(ROWS.length)})`;
+}
+
 // ---- call metrics: cost, tokens, words, voices, most used words (app/call_metrics.py)
 const inr = (v, d = 2) => v == null ? "–" : "₹" + Number(v).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
 const pctOf = (n, d) => d ? `${Math.round(100 * n / d)}%` : "–";
@@ -523,6 +534,15 @@ function callStatsHtml(m) {
                          : `<div class="muted small">LLM tokens weren't recorded for this call (processed before tokens were counted)</div>`)
     + `<div>Cost: <b>${inr(m.cost_inr)}</b> <span class="muted small">(Sarvam ${inr(m.stt_cost_inr)} for ${fmtDur(m.audio_s)} of audio · LLM ${m.llm_cost_inr == null ? "price not set" : inr(m.llm_cost_inr)})</span></div>`;
 }
+function redoNote(r) {
+  if (!r) return "";
+  if (!r.enabled) return `<div class="note">Old recordings are not being redone with Sarvam (switched off, or no Sarvam key).</div>`;
+  if (!r.left) return `<div class="note fixed">Every recording that can be redone is now transcribed by Sarvam.</div>`;
+  return `<div class="note">Redoing old recordings with Sarvam: <b>${num(r.left)}</b> left (${num(r.left_audio_min, 1)} min of audio, about
+    ${inr(r.left_audio_min / 60 * (LAST_METRICS?.cost?.sarvam_inr_per_hour || 45), 0)}). ${num(r.batch)} at a time, then a ${num(r.pause_min)} min rest; new uploads go first.
+    Calls someone corrected or checked are kept as they are.</div>`;
+}
+let LAST_METRICS = null;
 function splitBar(parts, total) {
   const bar = parts.filter(p => p[1]).map(([, n, c]) => `<span style="width:${100 * n / total}%;background:var(${c})"></span>`).join("");
   const legend = parts.map(([l, n, c]) => `<span><i style="background:var(${c})"></i>${l}: <b>${num(n)}</b> (${pctOf(n, total)})</span>`).join("");
@@ -538,16 +558,17 @@ async function loadMetrics() {
   let d;
   try { d = await api("api/recordings/metrics?" + q); } catch (e) { return; }
   if (ask !== loadMetrics.n) return;                     // a newer filter change already asked again
+  LAST_METRICS = d;
   $("metricsPanel").hidden = false;
   if (!d.calls) { $("metrics").innerHTML = '<p class="muted">No processed calls with a transcript here yet.</p>'; return; }
   const kpi = (l, v, sub, tone) => `<div class="kpi" style="--tone:var(${tone})"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${sub}</div></div>`;
-  const t = d.tokens, c = d.cost, n = d.calls;
+  const c = d.cost, n = d.calls;
+  const grp = w => w.group ? ` <span class="small muted">· ${esc(w.group)}</span>` : "";
   const maxW = Math.max(1, ...d.top_words.map(w => w.count));
   const wordTable = (rows, cols) => rows.length ? `<div class="table-wrap"><table><thead><tr>${cols}</tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted small">Not enough calls yet.</p>';
   $("metrics").innerHTML = `<div class="kpis">
       ${kpi("Calls measured", num(n), `${num(d.audio_min, 1)} min of audio · ${num(d.by_sarvam)} by Sarvam`, "--c1")}
       ${kpi("Cost per call", inr(c.avg_inr), `${inr(c.total_inr)} for ${num(c.calls)} calls · Sarvam ${inr(c.stt_inr)}, LLM ${inr(c.llm_inr)}`, "--c2")}
-      ${kpi("Tokens per call", num(t.avg), t.calls ? `${num(t.total)} tokens over ${num(t.calls)} calls` : "counted from now on", "--c6")}
       ${kpi("Words per call", num(d.words.avg), `${num(d.words.total)} words · ${num(d.words.per_min)} a minute`, "--c5")}
       ${kpi("Both voices found", pctOf(d.voices.two_or_more, n), `${num(d.voices.two_or_more)} of ${num(n)} calls`, "--c3")}
       ${kpi("RM and CSP both found", pctOf(d.roles.both, n), `${num(d.roles.both)} of ${num(n)} calls`, "--c4")}
@@ -558,10 +579,12 @@ async function loadMetrics() {
     <h3 style="margin:4px 0 0;font-size:14px">Who the AI found on the call</h3>
     ${splitBar([["RM and CSP", d.roles.both, "--c2"], ["Only RM", d.roles.rm_only, "--c1"], ["Only CSP", d.roles.csp_only, "--c5"],
                 ["Neither", d.roles.neither, "--c4"]], n)}
+    ${d.groups.length ? `<h3 style="margin:4px 0 6px;font-size:14px">What the calls talk about</h3>
+      <div class="badges">${d.groups.map(g => `<span class="badge">${esc(g.group)}: <b>${num(g.count)}</b></span>`).join("")}</div>` : ""}
     <div class="metrics-grid">
       <div>
         <h3>Most used words</h3>
-        ${wordTable(d.top_words.map(w => `<tr><td class="wbar" style="--w:${100 * w.count / maxW}%"><span>${esc(w.word)}</span></td><td class="num">${num(w.count)}</td><td class="num">${num(w.calls)}</td></tr>`).join(""),
+        ${wordTable(d.top_words.map(w => `<tr><td class="wbar" style="--w:${100 * w.count / maxW}%"><span>${esc(w.word)}${grp(w)}</span></td><td class="num">${num(w.count)}</td><td class="num">${num(w.calls)}</td></tr>`).join(""),
           '<th>Word</th><th class="num">Times</th><th class="num">Calls</th>')}
       </div>
       <div>
@@ -569,19 +592,20 @@ async function loadMetrics() {
         ${wordTable(d.top_phrases.map(p => `<tr><td>${esc(p.phrase)}</td><td class="num">${num(p.count)}</td></tr>`).join(""),
           '<th>Phrase</th><th class="num">Times</th>')}
         <h3 style="margin-top:14px">Said 3+ times in one call</h3>
-        ${wordTable(d.repeated_in_call.slice(0, 15).map(w => `<tr><td>${esc(w.word)}</td><td class="num">${num(w.calls)}</td></tr>`).join(""),
+        ${wordTable(d.repeated_in_call.slice(0, 15).map(w => `<tr><td>${esc(w.word)}${grp(w)}</td><td class="num">${num(w.calls)}</td></tr>`).join(""),
           '<th>Word</th><th class="num">Calls</th>')}
       </div>
       <div>
         <h3>RM's top words</h3>
-        ${wordTable(d.top_words_rm.map(w => `<tr><td>${esc(w.word)}</td><td class="num">${num(w.count)}</td></tr>`).join(""), '<th>Word</th><th class="num">Times</th>')}
+        ${wordTable(d.top_words_rm.map(w => `<tr><td>${esc(w.word)}${grp(w)}</td><td class="num">${num(w.count)}</td></tr>`).join(""), '<th>Word</th><th class="num">Times</th>')}
         <h3 style="margin-top:14px">CSP's top words</h3>
-        ${wordTable(d.top_words_csp.map(w => `<tr><td>${esc(w.word)}</td><td class="num">${num(w.count)}</td></tr>`).join(""), '<th>Word</th><th class="num">Times</th>')}
+        ${wordTable(d.top_words_csp.map(w => `<tr><td>${esc(w.word)}${grp(w)}</td><td class="num">${num(w.count)}</td></tr>`).join(""), '<th>Word</th><th class="num">Times</th>')}
       </div>
     </div>
+    ${redoNote(d.sarvam_redo)}
     <p class="small muted">Costs are estimates: Sarvam at ₹${num(c.sarvam_inr_per_hour)} an hour of audio (with speaker separation), LLM by its token prices
-      (Groq's free tier counts as ₹0). Tokens are counted for calls processed from now on${t.calls < n ? `: ${num(n - t.calls)} older calls have none` : ""}.
-      Common filler words (है, जी, haan, ok, sir…) are left out of the word lists.</p>`;
+      (Groq's free tier counts as ₹0). The word lists keep only words that matter for Eko's work (services, money, banks and IDs,
+      problems) and words people corrected as misheard: the vocabulary worth fine-tuning on.</p>`;
 }
 
 async function loadLearning() {
@@ -592,7 +616,7 @@ async function loadLearning() {
   if (!t.calls && !i.checked) {
     $("learn").innerHTML = `<p class="muted">Nothing checked yet. Open a call, then press ✓ if the transcript or issue is right, or correct it.
       ${t.to_check ? `<button class="linkish" style="background:none;border:0;box-shadow:none;color:var(--accent);cursor:pointer;text-decoration:underline;padding:0"
-      onclick="$('fStatus').value='check'; render(); $('rows').scrollIntoView({behavior:'smooth'})">Show the ${num(t.to_check)} calls to check</button>` : ""}</p>`;
+      onclick="$('fStatus').value='check'; toggleList(true); render(); $('rows').scrollIntoView({behavior:'smooth'})">Show the ${num(t.to_check)} calls to check</button>` : ""}</p>`;
     return;
   }
   const pct = v => v == null ? "–" : `${v}%`;

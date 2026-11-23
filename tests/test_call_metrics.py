@@ -69,9 +69,11 @@ def test_summary_over_calls_in_view():
     assert d["tokens"]["calls"] == 1 and d["tokens"]["total"] == 110
     top = {w["word"]: w for w in d["top_words"]}
     assert top["slab"]["count"] == 5 and top["slab"]["calls"] == 1 and "जी" not in top and "hello" not in top
-    assert {"word": "slab", "calls": 1} in d["repeated_in_call"]
+    assert {"word": "slab", "calls": 1, "group": "Eko business"} in d["repeated_in_call"]
     assert d["top_phrases"][0]["phrase"] == "slab achieve"
-    assert d["top_words_rm"][0]["word"] == "slab" and any(w["word"] == "करेंगे" for w in d["top_words_csp"])
+    assert d["top_words_rm"][0]["word"] == "slab" and any(w["word"] == "achieve" for w in d["top_words_csp"])
+    assert "करेंगे" not in top and "वंदना" not in top                 # not domain words: left out
+    assert top["slab"]["group"] == "Eko business" and {"group": "Eko business", "count": 9} in d["groups"]
     assert call_metrics.summary("rm")["calls"] == 3 and call_metrics.summary("employee")["calls"] == 1
     assert call_metrics.summary("rm", date_from=time.time() + 3600)["calls"] == 0
 
@@ -115,3 +117,75 @@ def test_review_tokens_are_stored_with_the_recording(monkeypatch, tmp_path):
     r = recordings.get_recording(rid)
     assert r["status"] == "done" and r["timing"]["stt"].startswith("Sarvam")
     assert r["metrics"]["tokens"] == 790 and r["metrics"]["audio_s"] == 60 and r["metrics"]["stt_cost_inr"] == 0.75
+
+
+def test_domain_words_and_misheard_corrections_are_kept():
+    from app import domain_terms
+    assert domain_terms.group_of("Refunds") == "Refund" and domain_terms.group_of("कमीशन") == "Commission"
+    assert domain_terms.group_of("बैंक") == "Banks & IDs" and domain_terms.group_of("status") is None
+    assert domain_terms.group_of("वंदना") is None and domain_terms.group_of("zyx", {"zyx": "Corrected as misheard"})
+
+
+def _backfill_env(monkeypatch, tmp_path, transcribe):
+    from app import llm_engine, recordings, sarvam
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    monkeypatch.setattr(recordings, "BACKFILL", True)
+    monkeypatch.setattr(recordings, "storage_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(sarvam, "transcribe", transcribe)
+    monkeypatch.setattr(llm_engine, "provider", lambda: "groq")
+    monkeypatch.setattr(recordings, "_write_summary", lambda rid: None)
+    monkeypatch.setattr(recordings, "_ask", lambda *a: ({"speakers": ["rm"], "is_csp_call": True, "summary": "new"}, "m"))
+
+    def no_handoff(*a):
+        raise AssertionError("an old recording redone must not be sent again")
+    monkeypatch.setattr(recordings, "send_to_prachi_api", no_handoff)
+    monkeypatch.setattr(recordings.integrations, "recording_processed", no_handoff)
+
+
+def _old(tmp_path, name, **cols):
+    from app import db
+    (tmp_path / name).write_bytes(b"audio")
+    rid = _rec([{"start": 0, "end": 2, "text": "whisper text", "speaker": "rm"}], sarvam=cols.pop("sarvam", False))
+    db.update("recordings", rid, file_path=name, attempts=1, **cols)
+    return rid
+
+
+def test_old_recordings_are_redone_by_sarvam_in_batches(monkeypatch, tmp_path):
+    from app import db, recordings
+    _backfill_env(monkeypatch, tmp_path, lambda path: [{"start": 0, "end": 2, "text": "Sarvam ne suna", "voice": "A"}])
+    a = _old(tmp_path, "a.m4a")
+    b = _old(tmp_path, "b.m4a", status="failed")
+    _old(tmp_path, "c.m4a", checked_at=time.time())                 # a person checked it: kept
+    _old(tmp_path, "d.m4a", mode="employee")                        # not transcribed at all
+    _old(tmp_path, "e.m4a", sarvam=True)                            # already Sarvam
+    db.update("recordings", _old(tmp_path, "f.m4a"), file_path="gone.m4a")   # audio missing
+    assert {r["id"] for r in recordings.backfill_candidates()} == {a, b}
+    assert recordings.backfill_status()["left"] == 2
+    assert recordings.backfill_batch(1)["redone"] == 1                  # one batch of one
+    assert recordings.backfill_status()["left"] == 1
+    assert recordings.backfill_batch()["redone"] == 1
+    for rid in (a, b):
+        r = recordings.get_recording(rid)
+        assert r["status"] == "done" and r["transcript"][0]["text"] == "Sarvam ne suna" and r["summary"] == "new"
+    assert recordings.backfill_status()["left"] == 0
+
+
+def test_a_failed_redo_keeps_the_old_transcript_and_gives_up_after_three(monkeypatch, tmp_path):
+    from app import recordings, sarvam
+    def broken(path):
+        raise sarvam.SarvamError("bad file", 400)
+    _backfill_env(monkeypatch, tmp_path, broken)
+    rid = _old(tmp_path, "a.m4a")
+    for _ in range(3):
+        assert recordings.backfill_batch()["failed"] == 1
+    r = recordings.get_recording(rid)
+    assert r["status"] == "done" and r["transcript"][0]["text"] == "whisper text"
+    assert recordings.backfill_candidates() == []
+
+
+def test_new_uploads_go_before_the_redo(monkeypatch, tmp_path):
+    from app import db, recordings
+    _backfill_env(monkeypatch, tmp_path, lambda path: [])
+    _old(tmp_path, "a.m4a")
+    db.update("recordings", _old(tmp_path, "b.m4a"), status="new")
+    assert recordings.backfill_batch() == {"redone": 0, "failed": 0, "stopped": "new uploads waiting"}

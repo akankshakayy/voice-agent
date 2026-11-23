@@ -1,6 +1,7 @@
 """Numbers about processed call recordings, for the recordings page: what each call cost (Sarvam's transcription
 plus the LLM's tokens), how many words were captured, whether both voices (and both the RM and the CSP) were
-found, and which words and phrases come up most.
+found, and which words and phrases come up most. The word lists keep only words that matter for Eko's work
+(app/domain_terms.py) and words people corrected as misheard: the vocabulary worth fine-tuning on.
 
 Costs are estimates from published rates, set by env so they can follow price changes:
     SARVAM_INR_PER_HOUR=45        # Sarvam speech-to-text with speaker separation, per hour of audio (billed per second)
@@ -14,7 +15,7 @@ import os
 import re
 from collections import Counter, defaultdict
 
-from . import db
+from . import db, domain_terms, misheard
 
 MASKS = re.compile(r"\[[A-Z]+\]")                         # [PHONE], [AADHAAR]… put in by recordings.mask
 WORD = re.compile(r"[\wऀ-ॿ]+", re.UNICODE)       # Latin, digits and Devanagari (with its vowel signs)
@@ -126,6 +127,10 @@ def summary(mode: str = "rm", rm_id: int | None = None, employee_id: int | None 
     rows = db.q(f"""SELECT id, duration_sec, transcript_json, stt_json, review_usage_json, summary_usage_json, is_csp_call
                     FROM recordings WHERE {' AND '.join(where)}""", tuple(args))
 
+    # Words people corrected as misheard are training data too, whatever their subject
+    fixed = {w.lower(): "Corrected as misheard" for p in misheard.pairs(1, 500) for w in words_of(p["said"])
+             if w not in STOPWORDS and len(w) > 1 and not w.isdigit()}
+    group = lambda w: domain_terms.group_of(w, fixed)   # noqa: E731
     per = []
     words, phrases, word_calls = Counter(), Counter(), Counter()
     by_role = defaultdict(Counter)
@@ -136,14 +141,14 @@ def summary(mode: str = "rm", rm_id: int | None = None, employee_id: int | None 
         in_call = Counter()
         for l in json.loads(r["transcript_json"]):
             ws = [w for w in words_of(l.get("text")) if not w.isdigit()]
-            keep = [w for w in ws if w not in STOPWORDS and len(w) > 1]
+            keep = [w for w in ws if w not in STOPWORDS and len(w) > 1 and group(w)]
             words.update(keep)
             in_call.update(keep)
             by_role[l.get("speaker") or "unknown"].update(keep)
-            for n in (2, 3):     # phrases: runs of words, skipping ones made only of filler words
+            for n in (2, 3):     # phrases: runs of words holding a domain word, not starting or ending in filler
                 for i in range(len(ws) - n + 1):
                     gram = ws[i:i + n]
-                    if sum(w not in STOPWORDS for w in gram) >= 1 and gram[0] not in STOPWORDS and gram[-1] not in STOPWORDS:
+                    if gram[0] not in STOPWORDS and gram[-1] not in STOPWORDS and any(group(w) for w in gram):
                         phrases[" ".join(gram)] += 1
         word_calls.update(in_call.keys())
         repeats.update(w for w, c in in_call.items() if c >= 3)
@@ -153,7 +158,8 @@ def summary(mode: str = "rm", rm_id: int | None = None, employee_id: int | None 
     with_tokens = [m for m in per if m["tokens_recorded"]]
     tot = lambda key, group=per: sum(m[key] or 0 for m in group)   # noqa: E731
     avg = lambda key, group: round(tot(key, group) / len(group), 2) if group else None   # noqa: E731
-    word_rows = lambda counter: [{"word": w, "count": c, "calls": word_calls[w]} for w, c in counter.most_common(top)]   # noqa: E731
+    word_rows = lambda counter: [{"word": w, "count": c, "calls": word_calls[w], "group": group(w)}   # noqa: E731
+                                 for w, c in counter.most_common(top)]
     return {
         "calls": n,
         "csp_calls": sum(1 for r in rows if r["is_csp_call"]),
@@ -175,7 +181,9 @@ def summary(mode: str = "rm", rm_id: int | None = None, employee_id: int | None 
                  "sarvam_inr_per_hour": float(os.environ.get("SARVAM_INR_PER_HOUR", "45"))},
         "top_words": word_rows(words),
         "top_phrases": [{"phrase": p, "count": c} for p, c in phrases.most_common(top) if c >= 2],
-        "repeated_in_call": [{"word": w, "calls": c} for w, c in repeats.most_common(top)],
-        "top_words_rm": [{"word": w, "count": c} for w, c in by_role["rm"].most_common(15)],
-        "top_words_csp": [{"word": w, "count": c} for w, c in by_role["csp"].most_common(15)],
+        "repeated_in_call": [{"word": w, "calls": c, "group": group(w)} for w, c in repeats.most_common(top)],
+        "top_words_rm": [{"word": w, "count": c, "group": group(w)} for w, c in by_role["rm"].most_common(15)],
+        "top_words_csp": [{"word": w, "count": c, "group": group(w)} for w, c in by_role["csp"].most_common(15)],
+        "groups": [{"group": g, "count": c} for g, c in
+                   sum((Counter({group(w): c}) for w, c in words.items()), Counter()).most_common()],
     }

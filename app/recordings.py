@@ -979,7 +979,9 @@ def stt_confidence(cache: dict) -> float | None:
     return round(sum(math.exp(s["avg_logprob"]) * w for s, w in zip(segs, weight)) / sum(weight), 3) if segs else None
 
 
-def process_one(r: dict):
+def process_one(r: dict, backfill: bool = False):
+    """Transcribe, mask and review one recording. backfill=True: an old recording redone with Sarvam, so the
+    Prachi hand-off and the recording.processed webhook are skipped (they already had this call once)."""
     started, t0 = time.time(), time.perf_counter()
     path = os.path.join(storage_dir(), r["file_path"])
     mode = r.get("mode", "rm")
@@ -1052,6 +1054,8 @@ def process_one(r: dict):
               resolution=review.get("resolution"), rm_handling=review.get("rm_handling"),
               summary=review.get("summary"), model=model)
     _write_summary(r["id"])
+    if backfill:
+        return
     integrations.recording_processed(r["id"])
 
     # Send to Prachi's API for both RM and DC modes
@@ -1118,6 +1122,73 @@ def process_pending(limit: int | None = None, sleep=time.sleep, now: float | Non
         _busy.release()
 
 
+# ---------------------------------------------------------------- redoing old recordings with Sarvam
+# Recordings transcribed before Sarvam (by Whisper), or never transcribed, are redone a few at a time so neither
+# Sarvam's limits nor the LLM's free tier run out. New uploads always go first.
+BACKFILL = os.environ.get("SARVAM_BACKFILL", "1") != "0"
+BACKFILL_BATCH = int(os.environ.get("SARVAM_BACKFILL_BATCH", "10"))        # recordings per batch
+BACKFILL_PAUSE_S = int(os.environ.get("SARVAM_BACKFILL_PAUSE_S", "600"))   # rest between batches
+BACKFILL_MAX_TRIES = 3
+
+
+def backfill_candidates(limit: int | None = None) -> list[dict]:
+    """Old RM/DC recordings not yet transcribed by Sarvam with today's settings, newest calls first. Calls a person
+    corrected or checked in any way are left alone (redoing them would throw away their work), and so are calls
+    whose audio is gone or that failed Sarvam BACKFILL_MAX_TRIES times."""
+    mark = json.dumps({"provider": sarvam.settings()}, ensure_ascii=False)[1:-1]     # '"provider": "sarvam|…"'
+    rows = db.q("""SELECT * FROM recordings WHERE status IN ('done', 'failed') AND COALESCE(mode, 'rm') IN ('rm', 'dc')
+                   AND COALESCE(call_type, 'rm') != 'dc' AND (COALESCE(mode, 'rm') = 'rm' OR csp_id IS NOT NULL)
+                   AND transcript_edited_at IS NULL AND checked_at IS NULL AND issue_checked_at IS NULL
+                   AND edited_at IS NULL AND instr(COALESCE(stt_json, ''), ?) = 0
+                   ORDER BY COALESCE(started_at, uploaded_at) DESC""", (mark,))
+    out = []
+    for r in rows:
+        tries = (json.loads(r.get("stt_json") or "null") or {}).get("backfill_tries", 0)
+        if tries < BACKFILL_MAX_TRIES and os.path.exists(os.path.join(storage_dir(), r["file_path"])):
+            out.append(r)
+            if limit and len(out) >= limit:
+                break
+    return out
+
+
+def backfill_status() -> dict:
+    left = backfill_candidates()
+    return {"enabled": BACKFILL and sarvam.available(), "left": len(left),
+            "left_audio_min": round(sum(r.get("duration_sec") or 0 for r in left) / 60, 1),
+            "batch": BACKFILL_BATCH, "pause_min": round(BACKFILL_PAUSE_S / 60, 1)}
+
+
+def backfill_batch(limit: int | None = None, sleep=time.sleep) -> dict:
+    """Redo up to `limit` old recordings with Sarvam. Stops early when a new upload is waiting or a limit is hit.
+    A failure never changes the recording: it keeps its old transcript and is tried again in a later batch."""
+    if not (BACKFILL and sarvam.available()):
+        return {"redone": 0, "stopped": "off"}
+    if not _busy.acquire(blocking=False):
+        return {"busy": True}
+    redone, failed, stopped = 0, 0, None
+    try:
+        for r in backfill_candidates(limit or BACKFILL_BATCH):
+            if _count_new():
+                stopped = "new uploads waiting"
+                break
+            try:
+                process_one(r, backfill=True)
+                redone += 1
+            except RateLimited as e:
+                stopped = str(e)
+                sleep(min(e.wait, 300))
+                break
+            except Exception as e:
+                log.exception("Sarvam redo failed for recording %d", r["id"])
+                cache = json.loads(r.get("stt_json") or "null") or {}
+                cache.update(backfill_tries=cache.get("backfill_tries", 0) + 1, backfill_error=str(e)[:300])
+                db.update("recordings", r["id"], stt_json=cache)
+                failed += 1
+        return {"redone": redone, "failed": failed, "stopped": stopped}
+    finally:
+        _busy.release()
+
+
 def _count_new() -> int:
     return db.q("SELECT COUNT(*) AS n FROM recordings WHERE status='new'", one=True)["n"]
 
@@ -1140,7 +1211,7 @@ def processing_loop(stop: threading.Event):
     """Background thread (started by app.main). By default every recording is processed within seconds of
     its upload; a check every 5 minutes also picks up retries. With RECORDINGS_DAILY_AT set, it runs once a day
     instead. If a free-tier limit stops a run, it tries again 30 minutes later."""
-    last_day, next_try = None, 0.0
+    last_day, next_try, next_backfill = None, 0.0, time.time() + 60
     while not stop.is_set():
         if not DAILY_AT:
             if time.time() >= next_try and _count_new():
@@ -1152,7 +1223,15 @@ def processing_loop(stop: threading.Event):
                 except Exception:
                     log.exception("Recordings run failed")
                     next_try = time.time() + 1800
-            _arrived.wait(300)
+            if BACKFILL and time.time() >= next_backfill and not _count_new():
+                try:
+                    res = backfill_batch()
+                    if res.get("redone") or res.get("failed"):
+                        log.warning("Sarvam redo batch: %s; %s", res, backfill_status())
+                except Exception:
+                    log.exception("Sarvam redo batch failed")
+                next_backfill = time.time() + BACKFILL_PAUSE_S
+            _arrived.wait(min(300, max(5, next_backfill - time.time())) if BACKFILL else 300)
             _arrived.clear()
             continue
         now = datetime.now(TZ)

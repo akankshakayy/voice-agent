@@ -1911,7 +1911,10 @@ def recordings_metrics(request: Request, mode: str = "rm", rm_id: int | None = N
     words and phrases used most, over the processed calls in view (app/call_metrics.py)."""
     if request.state.user.get("role") == "rm":
         rm_id = request.state.user["rm_id"]      # RMs see only their own calls
-    return call_metrics.summary(mode, rm_id, employee_id, date_from, date_to)
+    out = call_metrics.summary(mode, rm_id, employee_id, date_from, date_to)
+    if request.state.user.get("role") in ("admin", "ops"):
+        out["sarvam_redo"] = recordings.backfill_status()   # old recordings still to be redone by Sarvam
+    return out
 
 
 class MisheardBlockBody(BaseModel):
