@@ -424,7 +424,9 @@ def conn(retry=True) -> sqlite3.Connection:
                                            "stt_errors": "INTEGER", "stt_words": "INTEGER",
                                            "issue_checked_at": "REAL", "issue_checked_by": "TEXT",
                                            "stt_confidence": "REAL",     # Whisper's own certainty, 0-1
-                                           "call_type": "TEXT DEFAULT 'rm'"})  # 'rm' (RM-CSP) or 'dc' (DC-official)
+                                           "call_type": "TEXT DEFAULT 'rm'",   # 'rm' (RM-CSP) or 'dc' (DC-official)
+                                           # LLM tokens used per model: the call review and the detailed summary
+                                           "review_usage_json": "TEXT", "summary_usage_json": "TEXT"})
         if "agent_summary" not in {r[1] for r in _conn.execute("PRAGMA table_info(tickets)")}:
             # The agent's own version of a ticket, kept when an RM edits it (correction delta, acceptance rate)
             _add_columns(_conn, "tickets", {"agent_summary": "TEXT", "agent_details_json": "TEXT",
@@ -513,11 +515,12 @@ def _add_columns(c: sqlite3.Connection, table: str, cols: dict, demo_source: boo
 def reset_connection(path: str | None = None):
     """Used by tests to point at a fresh database."""
     global _conn, DB_PATH
-    if _conn is not None:
-        _conn.close()
-    _conn = None
-    if path:
-        DB_PATH = path
+    with _lock:              # a background thread mid-write on the old connection would crash SQLite
+        if _conn is not None:
+            _conn.close()
+        _conn = None
+        if path:
+            DB_PATH = path
 
 
 def q(sql: str, args=(), one=False):

@@ -78,6 +78,16 @@
   .learn-grid h3 { margin: 4px 0 8px; font-size: 14px; }
   .learn-grid table { font-size: 13px; } .learn-grid .num { text-align: right; }
   .sure { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 4px; }
+  @media (max-width: 1000px) { .metrics-grid { grid-template-columns: 1fr; } }
+  .metrics-grid h3 { margin: 4px 0 8px; font-size: 14px; }
+  .metrics-grid table { font-size: 13px; } .metrics-grid .num { text-align: right; }
+  .split { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--panel-2); margin: 6px 0 4px; }
+  .split > span { display: block; height: 100%; }
+  .split-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .split-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .wbar { position: relative; } .wbar::before { content: ""; position: absolute; inset: 3px auto 3px 0; width: var(--w);
+    background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 3px; } .wbar > * { position: relative; }
   .edit-bar { position: sticky; bottom: 0; display: flex; gap: 8px; align-items: center; padding: 10px 0; background: var(--panel); border-top: 1px solid var(--border); margin-top: 8px; }
 </style>
 </head>
@@ -122,6 +132,12 @@
       <thead><tr><th class="num">#</th><th>Call time</th><th id="actorHeader">RM</th><th>CSP</th><th>Length</th><th>Issue</th><th>Status</th><th>From</th></tr></thead>
       <tbody id="rows"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
     </table></div>
+  </section>
+
+  <section class="panel" id="metricsPanel" hidden style="--tone:var(--c1);margin-top:16px">
+    <h2>Call metrics</h2>
+    <p class="small muted" style="margin-top:-6px" id="metricsNote">Processed calls in this tab, for the RM, employee and dates chosen above.</p>
+    <div id="metrics"></div>
   </section>
 
   <section class="panel" id="learnPanel" hidden style="--tone:var(--c3);margin-top:16px">
@@ -182,6 +198,7 @@ const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
       $("fEmployee").innerHTML += empOpts;
     }
     ["fStatus", "fCat", "fRm", "fEmployee", "fDateFrom", "fDateTo"].forEach(id => $(id).onchange = render);
+    ["fRm", "fEmployee", "fDateFrom", "fDateTo"].forEach(id => $(id).addEventListener("change", loadMetrics));
     $("fSearch").oninput = render;
     $("drawerBg").onclick = closeDrawer;
     $("uploadForm").onsubmit = upload;
@@ -231,6 +248,7 @@ async function refresh() {
   $("updated").textContent = "updated " + new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
   render();
   loadLearning();
+  loadMetrics();
   if (OPEN && !EDITING) {
     const r = ROWS.find(x => x.id === OPEN.id);
     if (r && r.status !== OPEN.status) openRec(OPEN.id);         // finished processing while open
@@ -280,6 +298,7 @@ function setMode(mode) {
   $("fSearch").value = "";
 
   render();
+  loadMetrics();
 }
 
 function render() {
@@ -392,6 +411,7 @@ async function openRec(id) {
       ${r.processed_at ? `<dt>Processed</dt><dd>${fmtTime(r.processed_at)}${r.model ? ` · <span class="muted">${esc(r.model)}</span>` : ""}</dd>` : ""}
       ${r.timing ? `<dt>Time taken</dt><dd>${timingHtml(r.timing)}</dd>` : ""}
       ${r.timing?.stt ? `<dt>Transcribed by</dt><dd>${esc(r.timing.stt)}</dd>` : ""}
+      ${r.metrics ? `<dt>Call stats</dt><dd>${callStatsHtml(r.metrics)}</dd>` : ""}
     </dl>
     ${lines.length ? `<div class="sec-head"><h3>Transcript</h3>
         ${canEdit ? `<span style="display:flex;gap:6px">${!r.checked_at ? `<button class="secondary" onclick="markChecked('transcript')">✓ Transcript is correct</button>` : ""}
@@ -493,6 +513,77 @@ async function blockPair(k, blocked) {
     toast(blocked ? "Kept out of the prompts" : "Allowed back into the prompts"); loadLearning();
   } catch (e) { toast(errText(e)); }
 }
+// ---- call metrics: cost, tokens, words, voices, most used words (app/call_metrics.py)
+const inr = (v, d = 2) => v == null ? "–" : "₹" + Number(v).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
+const pctOf = (n, d) => d ? `${Math.round(100 * n / d)}%` : "–";
+function callStatsHtml(m) {
+  const who = m.rm_found && m.csp_found ? "RM and CSP both found" : m.rm_found ? "only the RM found" : m.csp_found ? "only the CSP found" : "RM / CSP not found";
+  return `<div><b>${num(m.words)}</b> words · ${num(m.voices)} voice${m.voices === 1 ? "" : "s"} · ${who}</div>`
+    + (m.tokens_recorded ? `<div><b>${num(m.tokens)}</b> LLM tokens <span class="muted small">(${num(m.tokens_in)} in, ${num(m.tokens_out)} out)</span></div>`
+                         : `<div class="muted small">LLM tokens weren't recorded for this call (processed before tokens were counted)</div>`)
+    + `<div>Cost: <b>${inr(m.cost_inr)}</b> <span class="muted small">(Sarvam ${inr(m.stt_cost_inr)} for ${fmtDur(m.audio_s)} of audio · LLM ${m.llm_cost_inr == null ? "price not set" : inr(m.llm_cost_inr)})</span></div>`;
+}
+function splitBar(parts, total) {
+  const bar = parts.filter(p => p[1]).map(([, n, c]) => `<span style="width:${100 * n / total}%;background:var(${c})"></span>`).join("");
+  const legend = parts.map(([l, n, c]) => `<span><i style="background:var(${c})"></i>${l}: <b>${num(n)}</b> (${pctOf(n, total)})</span>`).join("");
+  return `<div class="split">${bar}</div><div class="split-legend">${legend}</div>`;
+}
+async function loadMetrics() {
+  const q = new URLSearchParams({ mode: CURRENT_MODE });
+  if (CURRENT_MODE === "rm" && $("fRm").value) q.set("rm_id", $("fRm").value);
+  if (CURRENT_MODE === "employee" && $("fEmployee").value) q.set("employee_id", $("fEmployee").value);
+  if ($("fDateFrom").value) q.set("date_from", new Date($("fDateFrom").value + "T00:00:00").getTime() / 1000);
+  if ($("fDateTo").value) q.set("date_to", new Date($("fDateTo").value + "T23:59:59").getTime() / 1000);
+  const ask = loadMetrics.n = (loadMetrics.n || 0) + 1;
+  let d;
+  try { d = await api("api/recordings/metrics?" + q); } catch (e) { return; }
+  if (ask !== loadMetrics.n) return;                     // a newer filter change already asked again
+  $("metricsPanel").hidden = false;
+  if (!d.calls) { $("metrics").innerHTML = '<p class="muted">No processed calls with a transcript here yet.</p>'; return; }
+  const kpi = (l, v, sub, tone) => `<div class="kpi" style="--tone:var(${tone})"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${sub}</div></div>`;
+  const t = d.tokens, c = d.cost, n = d.calls;
+  const maxW = Math.max(1, ...d.top_words.map(w => w.count));
+  const wordTable = (rows, cols) => rows.length ? `<div class="table-wrap"><table><thead><tr>${cols}</tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted small">Not enough calls yet.</p>';
+  $("metrics").innerHTML = `<div class="kpis">
+      ${kpi("Calls measured", num(n), `${num(d.audio_min, 1)} min of audio · ${num(d.by_sarvam)} by Sarvam`, "--c1")}
+      ${kpi("Cost per call", inr(c.avg_inr), `${inr(c.total_inr)} for ${num(c.calls)} calls · Sarvam ${inr(c.stt_inr)}, LLM ${inr(c.llm_inr)}`, "--c2")}
+      ${kpi("Tokens per call", num(t.avg), t.calls ? `${num(t.total)} tokens over ${num(t.calls)} calls` : "counted from now on", "--c6")}
+      ${kpi("Words per call", num(d.words.avg), `${num(d.words.total)} words · ${num(d.words.per_min)} a minute`, "--c5")}
+      ${kpi("Both voices found", pctOf(d.voices.two_or_more, n), `${num(d.voices.two_or_more)} of ${num(n)} calls`, "--c3")}
+      ${kpi("RM and CSP both found", pctOf(d.roles.both, n), `${num(d.roles.both)} of ${num(n)} calls`, "--c4")}
+    </div>
+    <h3 style="margin:4px 0 0;font-size:14px">Voices separated from the sound</h3>
+    ${splitBar([["2 voices", d.voices.two_or_more - d.voices.three_or_more, "--c2"], ["3 or more", d.voices.three_or_more, "--c6"],
+                ["1 voice", d.voices.one, "--c4"], ["No voice labels", d.voices.none, "--c3"]], n)}
+    <h3 style="margin:4px 0 0;font-size:14px">Who the AI found on the call</h3>
+    ${splitBar([["RM and CSP", d.roles.both, "--c2"], ["Only RM", d.roles.rm_only, "--c1"], ["Only CSP", d.roles.csp_only, "--c5"],
+                ["Neither", d.roles.neither, "--c4"]], n)}
+    <div class="metrics-grid">
+      <div>
+        <h3>Most used words</h3>
+        ${wordTable(d.top_words.map(w => `<tr><td class="wbar" style="--w:${100 * w.count / maxW}%"><span>${esc(w.word)}</span></td><td class="num">${num(w.count)}</td><td class="num">${num(w.calls)}</td></tr>`).join(""),
+          '<th>Word</th><th class="num">Times</th><th class="num">Calls</th>')}
+      </div>
+      <div>
+        <h3>Most repeated phrases</h3>
+        ${wordTable(d.top_phrases.map(p => `<tr><td>${esc(p.phrase)}</td><td class="num">${num(p.count)}</td></tr>`).join(""),
+          '<th>Phrase</th><th class="num">Times</th>')}
+        <h3 style="margin-top:14px">Said 3+ times in one call</h3>
+        ${wordTable(d.repeated_in_call.slice(0, 15).map(w => `<tr><td>${esc(w.word)}</td><td class="num">${num(w.calls)}</td></tr>`).join(""),
+          '<th>Word</th><th class="num">Calls</th>')}
+      </div>
+      <div>
+        <h3>RM's top words</h3>
+        ${wordTable(d.top_words_rm.map(w => `<tr><td>${esc(w.word)}</td><td class="num">${num(w.count)}</td></tr>`).join(""), '<th>Word</th><th class="num">Times</th>')}
+        <h3 style="margin-top:14px">CSP's top words</h3>
+        ${wordTable(d.top_words_csp.map(w => `<tr><td>${esc(w.word)}</td><td class="num">${num(w.count)}</td></tr>`).join(""), '<th>Word</th><th class="num">Times</th>')}
+      </div>
+    </div>
+    <p class="small muted">Costs are estimates: Sarvam at ₹${num(c.sarvam_inr_per_hour)} an hour of audio (with speaker separation), LLM by its token prices
+      (Groq's free tier counts as ₹0). Tokens are counted for calls processed from now on${t.calls < n ? `: ${num(n - t.calls)} older calls have none` : ""}.
+      Common filler words (है, जी, haan, ok, sir…) are left out of the word lists.</p>`;
+}
+
 async function loadLearning() {
   let d;
   try { d = LEARN = await api("api/recordings/learning"); } catch (e) { return; }

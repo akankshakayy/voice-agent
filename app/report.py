@@ -108,6 +108,7 @@ def _chat(system: str, user: str, max_tokens: int = 2500) -> tuple[str, str, boo
                                                          messages=[{"role": "user", "content": user}])
         except anthropic.RateLimitError as e:
             raise RateLimited("Claude rate limit") from e
+        llm_engine.record_usage(llm_engine.MODEL, resp.usage.input_tokens, resp.usage.output_tokens)
         return ("".join(b.text for b in resp.content if b.type == "text").strip(), llm_engine.MODEL,
                 resp.stop_reason == "max_tokens")
     from openai import APIStatusError, OpenAI, RateLimitError
@@ -132,6 +133,8 @@ def _chat(system: str, user: str, max_tokens: int = 2500) -> tuple[str, str, boo
             if last or e.status_code not in (400, 413):
                 raise
             continue
+        if resp.usage:
+            llm_engine.record_usage(model, resp.usage.prompt_tokens, resp.usage.completion_tokens)
         text = re.sub(r"<think>.*?</think>", "", resp.choices[0].message.content or "", flags=re.S).strip()
         if text:
             return text, model, resp.choices[0].finish_reason == "length"
@@ -210,9 +213,10 @@ def make_summary(rec_id: int) -> dict:
     rec = get_recording(rec_id)
     t0 = time.perf_counter()
     try:
-        md, model = summarize(rec)
+        with llm_engine.count_usage() as used:
+            md, model = summarize(rec)
         db.update("recordings", rec_id, report_md=md, agent_report_md=None, report_error=None, report_at=time.time(),
-                  report_s=round(time.perf_counter() - t0, 1), report_model=model)
+                  report_s=round(time.perf_counter() - t0, 1), report_model=model, summary_usage_json=used)
     except Exception as e:
         db.update("recordings", rec_id, report_error=f"{type(e).__name__}: {e}"[:400])
         raise

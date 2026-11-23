@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import agent, auth, autogmap, bootstrap, bulk_load, db, google_auth, integrations, mailer, metrics, misheard, prachi_sync, recordings, report, stt, telemetry, tts  # noqa: E402
+from . import agent, auth, autogmap, bootstrap, bulk_load, call_metrics, db, google_auth, integrations, mailer, metrics, misheard, prachi_sync, recordings, report, stt, telemetry, tts  # noqa: E402
 from .logging_config import setup_logging  # noqa: E402
 from .seed import seed_if_demo  # noqa: E402
 from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, MAX_MISUNDERSTOOD  # noqa
@@ -1902,6 +1902,16 @@ def recordings_learning(request: Request, rm_id: int | None = None):
     if u.get("role") == "rm":
         rm_id = u["rm_id"]  # RMs always see only their own metrics
     return recordings.learning_stats(rm_id)
+
+
+@app.get("/api/recordings/metrics", dependencies=[Depends(allow("admin", "ops", "rm"))])
+def recordings_metrics(request: Request, mode: str = "rm", rm_id: int | None = None, employee_id: int | None = None,
+                       date_from: float | None = None, date_to: float | None = None):
+    """Cost and tokens per call, words captured, calls where both voices / both the RM and CSP were found, and the
+    words and phrases used most, over the processed calls in view (app/call_metrics.py)."""
+    if request.state.user.get("role") == "rm":
+        rm_id = request.state.user["rm_id"]      # RMs see only their own calls
+    return call_metrics.summary(mode, rm_id, employee_id, date_from, date_to)
 
 
 class MisheardBlockBody(BaseModel):

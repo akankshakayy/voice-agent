@@ -3,7 +3,7 @@
 The uploader app (uploader/) sends the dialer's own recording of every call on the Eko SIM to
 POST /api/uploader/recordings a few minutes after each call. Every new file is processed as soon as it
 arrives (or once a day, if RECORDINGS_DAILY_AT is set, e.g. 21:00 IST):
-  1. transcribed with Whisper on Groq, as timed segments
+  1. transcribed by Sarvam (saaras, Hindi-English codemix), already split by speaker (SARVAM_API_KEY)
   2. masked: Aadhaar, PAN, card, account, phone and OTP/PIN numbers are cut from the text before it is
      stored or sent to the LLM (regex only: numbers spoken as Hindi words get through)
   3. reviewed by the LLM: who said each line (RM or CSP), issue type, details, CSP mood, how it ended,
@@ -36,15 +36,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import db, diarize, integrations, llm_engine, misheard, report, sarvam, stt, telemetry
+from . import call_metrics, db, integrations, llm_engine, misheard, report, sarvam, stt, telemetry
 from .taxonomy import CATEGORIES, SLOT_LABELS
-
-# Try to use Claude for STT, fallback to Groq
-try:
-    from . import claude_stt
-    STT_ENGINE = claude_stt  # Claude CLI with Groq fallback
-except ImportError:
-    STT_ENGINE = stt  # Fallback to pure Groq
 
 log = logging.getLogger("eko.recordings")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -55,13 +48,6 @@ RATE_LIMIT_RETRIES = 3
 DAILY_AT = os.environ.get("RECORDINGS_DAILY_AT", "").strip()   # "" = process each recording as it arrives
 RETRY_AFTER_S = 600              # a failed recording waits 10 min, then 20, before its next try
 TZ = ZoneInfo(os.environ.get("RECORDINGS_TZ", "Asia/Kolkata"))
-LANG = os.environ.get("RECORDINGS_LANG", "hi")
-# Recorded calls aren't live, so they get Whisper's most accurate model (the live agent uses the faster turbo one)
-STT_MODEL = os.environ.get("RECORDINGS_STT_MODEL", "whisper-large-v3")
-# A style-only hint: without one, Whisper writes English words in Devanagari ("वेबसाइट") with no punctuation, and
-# mishears more. It must carry no facts: the live agent's hint ("मेरा DMT transfer fail हो गया") once turned up as
-# a line in a meeting that never mentioned a DMT. Lines that repeat the hint are dropped (_drop_leaks) as well.
-STT_PROMPT = os.environ.get("RECORDINGS_STT_PROMPT", "हाँ जी, ठीक है। तो ये website का project है, उसमें docs folder है।") or None
 AUDIO_EXTS = {"m4a", "mp3", "aac", "amr", "3gp", "ogg", "opus", "wav", "flac", "mp4", "webm"}
 DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 SPEAKERS = ["rm", "csp", "other", "unknown"]
@@ -881,6 +867,7 @@ def _ask(system: str, user: str, tool: dict) -> tuple[dict, str]:
                 tool_choice={"type": "tool", "name": tool["name"]})
         except anthropic.RateLimitError as e:
             raise RateLimited("Claude rate limit") from e
+        llm_engine.record_usage(llm_engine.MODEL, resp.usage.input_tokens, resp.usage.output_tokens)
         return dict(next(b for b in resp.content if b.type == "tool_use").input), llm_engine.MODEL
     from openai import APIStatusError, OpenAI, RateLimitError
     cfg = llm_engine.PROVIDERS[p]
@@ -903,6 +890,8 @@ def _ask(system: str, user: str, tool: dict) -> tuple[dict, str]:
             if last or e.status_code not in (400, 413):
                 raise
             continue
+        if resp.usage:
+            llm_engine.record_usage(model, resp.usage.prompt_tokens, resp.usage.completion_tokens)
         calls = resp.choices[0].message.tool_calls
         if calls:
             return json.loads(calls[0].function.arguments), model
@@ -934,25 +923,12 @@ def review_call(segs: list[dict]) -> tuple[dict, str]:
 
 
 # ---------------------------------------------------------------- processing
-def _compact(path: str) -> tuple[bytes, str]:
-    """Any phone format -> 16 kHz mono Opus, so a long call stays under Whisper's 25 MB limit.
-    Reads the file itself, not a pipe: phone .m4a files often keep their index at the end."""
-    if not stt.ffmpeg():
-        with open(path, "rb") as f:
-            return f.read(), os.path.basename(path)
-    out = subprocess.run([stt.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", path, "-ac", "1", "-ar", "16000",
-                          "-c:a", "libopus", "-b:a", "24k", "-f", "ogg", "pipe:1"], capture_output=True, timeout=600)
-    if out.returncode != 0 or not out.stdout:
-        raise ValueError(f"Couldn't read this audio file: {out.stderr.decode(errors='replace')[:200]}")
-    return out.stdout, "call.ogg"
-
-
 _SENTENCE_END = re.compile(r"(?<=[।?!])\s+|(?<=[A-Za-z\u0900-\u097F]{3}\.)\s+")   # not after "Rs." or "2.5"
 
 
 def split_sentences(segs: list[dict]) -> list[dict]:
-    """Whisper cuts audio at pauses, not at a change of speaker, so one segment often holds the RM's question and
-    the CSP's answer. Split each segment into sentences (times shared out by length) so each can get its own speaker."""
+    """A speech-to-text stretch can hold more than one sentence (and, when the voices weren't told apart, both the
+    RM's question and the CSP's answer). Split each into sentences (times shared out by length) so each can get its own speaker."""
     out = []
     for s in segs:
         parts = [p.strip() for p in _SENTENCE_END.split(s["text"]) if p.strip()]
@@ -967,89 +943,29 @@ def split_sentences(segs: list[dict]) -> list[dict]:
     return out
 
 
-def _is_rate_limit(e: Exception) -> bool:
-    return type(e).__name__ == "RateLimitError" or getattr(e, "status_code", None) == 429
-
-
-def _lines(r: dict, path: str, cache: dict) -> list[dict]:
-    """Transcript lines, one speaker each: Sarvam's own speaker split; else Whisper's words matched to the local
-    voice model; else Whisper's sentences."""
-    if "lines" in cache:
-        return split_sentences(cache["lines"])
-    segs, words = cache["segments"], cache["words"]
-    if words and diarize.available():
-        try:
-            if cache.get("voice_settings") != diarize.settings():
-                t0 = time.perf_counter()
-                cache.update(turns=diarize.diarize(path), voice_settings=diarize.settings(),
-                             voices_s=round(time.perf_counter() - t0, 1), voices_at=time.time())
-                db.update("recordings", r["id"], stt_json=cache)
-            if cache["turns"]:
-                return split_sentences(diarize.assign_words(diarize.punctuate(words, segs), cache["turns"]))
-        except Exception:
-            log.exception("Voice separation failed for %s; splitting by sentence instead", path)
-    return split_sentences(segs)
-
-
-PROMPT_UNSET = object()     # results saved before the prompt was recorded are redone
-
-
-def _norm(text: str) -> str:
-    return re.sub(r"\W+", " ", (text or "").lower()).strip()
-
-
-def _drop_leaks(segs: list[dict], words: list[dict], prompt: str | None) -> tuple[list[dict], list[dict]]:
-    """Whisper sometimes repeats its hint over silence or noise. Drop every segment that mostly repeats it (and
-    that segment's words), so a hint can never show up as something a person said."""
-    if not prompt:
-        return segs, words
-    from difflib import SequenceMatcher
-    p = _norm(prompt)
-    leaked = [s for s in segs if (n := _norm(s["text"])) and
-              (SequenceMatcher(None, n, p).ratio() >= 0.6 or (len(n) >= 12 and n in p))]
-    if not leaked:
-        return segs, words
-    log.warning("Dropped %d transcript segment(s) that repeat the Whisper hint", len(leaked))
-    inside = lambda w: any(s["start"] - 0.05 <= w["start"] < s["end"] + 0.05 for s in leaked)   # noqa: E731
-    return [s for s in segs if s not in leaked], [w for w in words if not inside(w)]
+def _lines(cache: dict) -> list[dict]:
+    """Transcript lines, one speaker each, from Sarvam's own speaker split."""
+    return split_sentences(cache["lines"])
 
 
 def _transcribe(r: dict, path: str) -> dict:
-    """The speech-to-text result, reused from an earlier run with the same settings when there is one.
-    With SARVAM_API_KEY: Sarvam's transcript already split by speaker. Otherwise Whisper's segments and words."""
+    """Sarvam's transcript, already split by speaker. Reused from an earlier run with the same Sarvam settings, so
+    "Process again" doesn't pay twice; a transcript made with other settings (or by Whisper, before) is redone."""
+    if not sarvam.available():
+        raise ValueError("SARVAM_API_KEY is not set: recordings are transcribed by Sarvam only")
     cache = json.loads(r.get("stt_json") or "null") or {}
-    if sarvam.available():
-        if cache.get("provider") == sarvam.settings() and "lines" in cache:
-            return cache
-        t0 = time.perf_counter()
-        try:
-            lines = sarvam.transcribe(path)
-        except sarvam.SarvamError as e:
-            if e.status_code == 429:
-                raise RateLimited("Sarvam rate limit", 120) from e
-            raise
-        cache = {"provider": sarvam.settings(), "stt": f"Sarvam {sarvam.MODEL} ({sarvam.MODE}), speakers by Sarvam",
-                 "lines": lines, "transcribe_s": round(time.perf_counter() - t0, 1), "transcribe_at": time.time()}
-        db.update("recordings", r["id"], stt_json=cache)
-        return cache
-    want_words = diarize.available()
-    if cache.get("model") == STT_MODEL and cache.get("prompt", PROMPT_UNSET) == STT_PROMPT and (cache.get("words") or not want_words):
+    if cache.get("provider") == sarvam.settings() and "lines" in cache:
         return cache
     t0 = time.perf_counter()
-    audio, name = _compact(path)
     try:
-        segs, words = STT_ENGINE.transcribe_detailed(audio, name, LANG, STT_MODEL, words=want_words, prompt=STT_PROMPT)
-    except Exception as e:
-        if _is_rate_limit(e):
-            raise RateLimited("Whisper rate limit", 300) from e
+        lines = sarvam.transcribe(path)
+    except sarvam.SarvamError as e:
+        if e.status_code == 429:
+            raise RateLimited("Sarvam rate limit", 120) from e
         raise
-    segs, words = _drop_leaks(segs, words, STT_PROMPT)
-    old = cache
-    cache = {"model": STT_MODEL, "prompt": STT_PROMPT, "segments": segs, "words": words,
-             "stt": f"Whisper {STT_MODEL}" + (", speakers by the local voice model" if want_words else ""),
+    cache = {"provider": sarvam.settings(), "stt": sarvam.label(), "lines": lines,
+             "audio_s": call_metrics.audio_seconds(r, lines),
              "transcribe_s": round(time.perf_counter() - t0, 1), "transcribe_at": time.time()}
-    # Voice turns come from the audio, not the words: keep them when only the transcription is redone
-    cache.update({k: old[k] for k in ("turns", "voice_settings", "voices_s", "voices_at") if k in old})
     db.update("recordings", r["id"], stt_json=cache)
     return cache
 
@@ -1101,7 +1017,7 @@ def process_one(r: dict):
     cache = _transcribe(r, path) if corrected is None else json.loads(r.get("stt_json") or "null") or {}
     fresh_stt = cache.get("transcribe_at", 0) >= started
     t1 = time.perf_counter()
-    segs = corrected if corrected is not None else [{**s, "text": mask(s["text"])} for s in _lines(r, path, cache)]
+    segs = corrected if corrected is not None else [{**s, "text": mask(s["text"])} for s in _lines(cache)]
     fresh_voices = cache.get("voices_at", 0) >= started
     t2 = time.perf_counter()
 
@@ -1122,11 +1038,12 @@ def process_one(r: dict):
         integrations.recording_processed(r["id"])
         return
     t3 = time.perf_counter()
-    review, model = review_call(segs) if llm_engine.provider() else ({}, None)
+    with llm_engine.count_usage() as review_usage:
+        review, model = review_call(segs) if llm_engine.provider() else ({}, None)
     review_s = time.perf_counter() - t3
     speakers = ([s.get("speaker") or "unknown" for s in corrected] if corrected is not None
                 else review.get("speakers") or ["unknown"] * len(segs))
-    db.update("recordings", r["id"], **fields, timing_json=timing(review_s),
+    db.update("recordings", r["id"], **fields, timing_json=timing(review_s), review_usage_json=review_usage,
               transcript_json=[{**s, "speaker": sp} for s, sp in zip(segs, speakers)],
               is_csp_call=None if not review else int(bool(review.get("is_csp_call"))),
               language=review.get("language"), issue_segment=review.get("issue_segment"),
@@ -1168,8 +1085,8 @@ def process_pending(limit: int | None = None, sleep=time.sleep, now: float | Non
     if not _busy.acquire(blocking=False):
         return {"busy": True}
     try:
-        if not stt.available():
-            return {"processed": 0, "failed": 0, "left": _count_new(), "stopped": "GROQ_API_KEY is not set"}
+        if not sarvam.available():
+            return {"processed": 0, "failed": 0, "left": _count_new(), "stopped": "SARVAM_API_KEY is not set"}
         rows = db.q("SELECT * FROM recordings WHERE status='new' AND COALESCE(next_try_at, 0) <= ? ORDER BY uploaded_at"
                     + (f" LIMIT {int(limit)}" if limit else ""), (now or time.time(),))
         done = failed = 0
@@ -1243,7 +1160,7 @@ def processing_loop(stop: threading.Event):
             try:
                 res = process_pending()
                 log.warning("Daily recordings run: %s", res)
-                if res.get("stopped") and res.get("left") and stt.available():
+                if res.get("stopped") and res.get("left") and sarvam.available():
                     next_try = time.time() + 1800
                 elif not res.get("busy"):
                     last_day = now.strftime("%Y-%m-%d")
@@ -1302,7 +1219,8 @@ def get_recording(rec_id: int) -> dict | None:
                  r.agent_intent, r.agent_slots_json, r.checked_by, r.issue_checked_by, r.stt_errors,
                  r.model, r.processed_at, r.next_try_at, r.timing_json, r.report_md, r.report_error, r.report_at,
                  r.report_s, r.report_model, r.agent_summary, r.agent_report_md, r.transcript_edited_at, r.edited_at,
-                 r.edited_by FROM recordings r LEFT JOIN rms m ON m.id=r.rm_id
+                 r.edited_by, r.stt_json, r.review_usage_json, r.summary_usage_json
+                 FROM recordings r LEFT JOIN rms m ON m.id=r.rm_id
                  LEFT JOIN csps c ON c.id=r.csp_id WHERE r.id=?""", (rec_id,), one=True)
     if r:
         r["timing"] = json.loads(r.pop("timing_json") or "null")
@@ -1311,6 +1229,9 @@ def get_recording(rec_id: int) -> dict | None:
         r["removed"] = json.loads(r.pop("removed_json") or "[]")
         r["agent_slots"] = json.loads(r.pop("agent_slots_json") or "null")
         r["transcript_version"] = transcript_version(r)
+        r["metrics"] = call_metrics.for_call(r) if r["status"] == "done" and r["transcript"] else None
+        for k in ("stt_json", "review_usage_json", "summary_usage_json"):
+            r.pop(k)
     return r
 
 

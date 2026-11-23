@@ -4,9 +4,10 @@ Sarvam's models are built for Indian languages and Hinglish, and its servers are
 only offered through its batch API, which suits recordings (they aren't live): create a job, upload the file, start
 it, wait, then download the result. Each entry of the result is one speaker's stretch of speech with its times.
 
-    SARVAM_API_KEY=...            # from dashboard.sarvam.ai; without it recordings use Whisper + the local voice model
+    SARVAM_API_KEY=...            # from dashboard.sarvam.ai; required: recordings are transcribed by Sarvam only
     SARVAM_STT_MODEL=saaras:v4    # Sarvam's current speech model
     SARVAM_STT_MODE=codemix       # Hindi-English mixed speech, English words kept in English letters
+    RECORDINGS_SPEAKERS=2         # voices to split into (RM + CSP); 0 lets Sarvam guess. 2 won the A/B test
 """
 import os
 import shutil
@@ -33,9 +34,18 @@ def available() -> bool:
     return bool(os.environ.get("SARVAM_API_KEY"))
 
 
+def speakers() -> int:
+    return int(os.environ.get("RECORDINGS_SPEAKERS", "2") or 0)
+
+
 def settings() -> str:
     """What a saved result depends on; a change here means the file is sent again."""
-    return f"sarvam|{MODEL}|{MODE}|{LANGUAGE}|{os.environ.get('RECORDINGS_SPEAKERS', '0')}"
+    return f"sarvam|{MODEL}|{MODE}|{LANGUAGE}|{speakers()}"
+
+
+def label() -> str:
+    n = speakers()
+    return f"Sarvam {MODEL} ({MODE}), speakers by Sarvam" + (f", {n} voices" if n else "")
 
 
 def _client():
@@ -66,9 +76,8 @@ def transcribe(path: str, sleep=time.sleep) -> list[dict]:
     mp3 = _as_mp3(path)
     name = "call.mp3" if mp3 != path else os.path.basename(path)
     params = {"model": MODEL, "mode": MODE, "language_code": LANGUAGE, "with_diarization": True}
-    speakers = int(os.environ.get("RECORDINGS_SPEAKERS", "0") or 0)
-    if speakers:
-        params["num_speakers"] = speakers
+    if speakers():
+        params["num_speakers"] = speakers()
     with _client() as c:
         job = _check(c.post(API, json={"job_parameters": params}), "job creation")["job_id"]
         urls = _check(c.post(f"{API}/upload-files", json={"job_id": job, "files": [name]}), "upload request")

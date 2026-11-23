@@ -4,10 +4,12 @@ Every turn the model is forced to call a single `agent_turn` tool, so its output
 is always structured: the spoken reply + intent + extracted details + the next
 action. The orchestrator (agent.py) applies hard safety rules on top.
 """
+import contextvars
 import json
 import os
 import shutil
 import time
+from contextlib import contextmanager
 
 from . import misheard, spoken
 from .taxonomy import CATEGORIES, SLOT_LABELS, INTENT_CONFIDENCE_MIN
@@ -19,6 +21,31 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(str(text)) // 4)
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
+
+# Tokens the LLM really used (from the API's own usage numbers), added up per model while count_usage() is open.
+# Used for the per-call token and cost figures on the recordings page.
+_usage = contextvars.ContextVar("llm_usage", default=None)
+
+
+def record_usage(model: str | None, tokens_in: int | None, tokens_out: int | None):
+    u = _usage.get()
+    if u is None:
+        return
+    m = u.setdefault(model or "unknown", {"input": 0, "output": 0, "requests": 0})
+    m["input"] += int(tokens_in or 0)
+    m["output"] += int(tokens_out or 0)
+    m["requests"] += 1
+
+
+@contextmanager
+def count_usage():
+    """with count_usage() as used: ... -> used = {model: {"input", "output", "requests"}} for the calls inside."""
+    used = {}
+    token = _usage.set(used)
+    try:
+        yield used
+    finally:
+        _usage.reset(token)
 
 # Free OpenAI-compatible providers. Each needs only its own API key.
 PROVIDERS = {

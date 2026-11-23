@@ -5,7 +5,7 @@ gives:
 - word errors per recording (word error rate, shown on the recordings page), and
 - the words misheard again and again ("डीएमटी" -> "DMT"). Those go into the prompts of the live agent, the call
   review and the summary, so the LLM reads past them. Not into Whisper's own hint: Whisper copies hint text
-  into transcripts (see recordings.STT_PROMPT).
+  into transcripts (see evals/stt_bench.py WHISPER_PROMPT).
 
 Pairs that carry a number of three or more digits are left out: they are values (amounts, IDs), not words.
 

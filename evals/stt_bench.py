@@ -31,6 +31,41 @@ os.environ["RECORDINGS_SPEAKERS"] = "2"          # read at import by diarize and
 
 from app import diarize, recordings, sarvam, stt  # noqa: E402
 
+# The Whisper setup the live site used before Sarvam replaced it (kept here only so the A/B test can be re-run)
+WHISPER_MODEL = os.environ.get("RECORDINGS_STT_MODEL", "whisper-large-v3")
+WHISPER_LANG = "hi"
+# A style-only hint: without one, Whisper writes English words in Devanagari with no punctuation
+WHISPER_PROMPT = "हाँ जी, ठीक है। तो ये website का project है, उसमें docs folder है।"
+
+
+def _compact(path: str) -> tuple[bytes, str]:
+    """Any phone format -> 16 kHz mono Opus, so a long call stays under Whisper's 25 MB limit."""
+    if not stt.ffmpeg():
+        with open(path, "rb") as f:
+            return f.read(), os.path.basename(path)
+    out = subprocess.run([stt.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", path, "-ac", "1", "-ar", "16000",
+                          "-c:a", "libopus", "-b:a", "24k", "-f", "ogg", "pipe:1"], capture_output=True, timeout=600)
+    if out.returncode != 0 or not out.stdout:
+        raise ValueError(f"Couldn't read this audio file: {out.stderr.decode(errors='replace')[:200]}")
+    return out.stdout, "call.ogg"
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
+def drop_leaks(segs: list[dict], words: list[dict], prompt: str | None) -> tuple[list[dict], list[dict]]:
+    """Whisper sometimes repeats its hint over silence or noise: drop every segment that mostly repeats it."""
+    if not prompt:
+        return segs, words
+    p = _norm(prompt)
+    leaked = [s for s in segs if (n := _norm(s["text"])) and
+              (SequenceMatcher(None, n, p).ratio() >= 0.6 or (len(n) >= 12 and n in p))]
+    if not leaked:
+        return segs, words
+    inside = lambda w: any(s["start"] - 0.05 <= w["start"] < s["end"] + 0.05 for s in leaked)   # noqa: E731
+    return [s for s in segs if s not in leaked], [w for w in words if not inside(w)]
+
 
 def ids() -> list[int]:
     return json.load(open(os.path.join(BENCH, "selected.json")))
@@ -46,13 +81,12 @@ def lines_sarvam(path: str) -> tuple[list[dict], str]:
 
 
 def lines_whisper(path: str) -> tuple[list[dict], str]:
-    audio, name = recordings._compact(path)
-    segs, words = stt.transcribe_detailed(audio, name, recordings.LANG, recordings.STT_MODEL, words=True,
-                                          prompt=recordings.STT_PROMPT)
-    segs, words = recordings._drop_leaks(segs, words, recordings.STT_PROMPT)
+    audio, name = _compact(path)
+    segs, words = stt.transcribe_detailed(audio, name, WHISPER_LANG, WHISPER_MODEL, words=True, prompt=WHISPER_PROMPT)
+    segs, words = drop_leaks(segs, words, WHISPER_PROMPT)
     turns = diarize.diarize(path)
     lines = diarize.assign_words(diarize.punctuate(words, segs), turns) if turns and words else segs
-    return recordings.split_sentences(lines), f"Whisper {recordings.STT_MODEL} + local voices, 2 speakers"
+    return recordings.split_sentences(lines), f"Whisper {WHISPER_MODEL} + local voices, 2 speakers"
 
 
 ENGINES = {"sarvam": lines_sarvam, "whisper": lines_whisper}

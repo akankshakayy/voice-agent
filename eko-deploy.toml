@@ -10,7 +10,7 @@ user = "10001"
 # EKO_* names are reserved by the platform: EKO_DB_PATH defaults to /app/data/eko_agent.db (Dockerfile ENV, start.sh)
 env = { DATA_DIR = "/app/data", COOKIE_PATH = "/" }
 secrets = ["ADMIN_EMAILS", "APP_BASE_URL", "COOKIE_SECURE", "GOOGLE_CLIENT_ID",
-           "GOOGLE_CLIENT_SECRET", "GROQ_API_KEY", "RECORDINGS_STT_MODEL", "SESSION_SECRET", "TRUST_PROXY",
+           "GOOGLE_CLIENT_SECRET", "GROQ_API_KEY", "SARVAM_API_KEY", "SESSION_SECRET", "TRUST_PROXY",
            "AUTOGMAP_ENABLED", "AUTOGMAP_NUMBERS_URL", "AUTOGMAP_RECORDINGS_URL", "AUTOGMAP_API_KEY"]
 volumes = [{ name = "data", path = "/app/data" }]
 
