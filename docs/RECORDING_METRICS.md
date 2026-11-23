@@ -37,6 +37,12 @@ Opening a call shows its own **Call stats** in the details: words, voices, who w
 ## Tests
 `tests/test_call_metrics.py`.
 
+### Word cards
+Under "Words that matter" there are five cards: Most used words, Most repeated phrases, Said 3+ times in one call,
+RM's top words and CSP's top words. Each card shows how many distinct domain words (or phrases) are in that list
+and how often they come up. Click a card to open its list below (top 30, with each word's group). Click it again,
+or press Hide, to close it. One list is open at a time, and it stays open when the page refreshes itself.
+
 ## Recordings list
 The table of calls starts closed. Click "View all recordings" to open it and "Hide recordings" to close it. It
 opens by itself when you search, pick a status, or press "Show the calls to check". The tabs and filters stay

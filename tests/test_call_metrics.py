@@ -73,6 +73,7 @@ def test_summary_over_calls_in_view():
     assert d["top_phrases"][0]["phrase"] == "slab achieve"
     assert d["top_words_rm"][0]["word"] == "slab" and any(w["word"] == "achieve" for w in d["top_words_csp"])
     assert "करेंगे" not in top and "वंदना" not in top                 # not domain words: left out
+    assert d["word_counts"]["top_words"] == {"distinct": 2, "uses": 9} and d["word_counts"]["top_words_rm"]["distinct"] == 2
     assert top["slab"]["group"] == "Eko business" and {"group": "Eko business", "count": 9} in d["groups"]
     assert call_metrics.summary("rm")["calls"] == 3 and call_metrics.summary("employee")["calls"] == 1
     assert call_metrics.summary("rm", date_from=time.time() + 3600)["calls"] == 0

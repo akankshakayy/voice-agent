@@ -82,6 +82,12 @@
   @media (max-width: 1000px) { .metrics-grid { grid-template-columns: 1fr; } }
   .metrics-grid h3 { margin: 4px 0 8px; font-size: 14px; }
   .metrics-grid table { font-size: 13px; } .metrics-grid .num { text-align: right; }
+  button.word-card { display: block; width: 100%; text-align: left; cursor: pointer; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px 14px; box-shadow: none; }
+  button.word-card:hover:not(:disabled) { border-color: color-mix(in srgb, var(--tone) 45%, var(--border)); filter: none; box-shadow: none; }
+  button.word-card:active:not(:disabled) { transform: none; }
+  button.word-card.on, button.word-card.on:hover:not(:disabled) { border-color: var(--tone); box-shadow: inset 0 0 0 1px var(--tone); }
+  button.word-card:focus-visible { outline: 2px solid var(--tone); outline-offset: 2px; }
   .split { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--panel-2); margin: 6px 0 4px; }
   .split > span { display: block; height: 100%; }
   .split-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-bottom: 14px; }
@@ -542,7 +548,34 @@ function redoNote(r) {
     ${inr(r.left_audio_min / 60 * (LAST_METRICS?.cost?.sarvam_inr_per_hour || 45), 0)}). ${num(r.batch)} at a time, then a ${num(r.pause_min)} min rest; new uploads go first.
     Calls someone corrected or checked are kept as they are.</div>`;
 }
-let LAST_METRICS = null;
+let LAST_METRICS = null, OPEN_WORDS = null;
+const WORD_LISTS = [["top_words", "Most used words", "--c1"], ["top_phrases", "Most repeated phrases", "--c2"],
+  ["repeated_in_call", "Said 3+ times in one call", "--c6"], ["top_words_rm", "RM's top words", "--c5"], ["top_words_csp", "CSP's top words", "--c3"]];
+function openWords(k) {                                   // one list open at a time; clicking it again closes it
+  OPEN_WORDS = OPEN_WORDS === k ? null : k;
+  document.querySelectorAll(".word-card").forEach(b => {
+    const on = b.getAttribute("onclick") === `openWords('${OPEN_WORDS}')`;
+    b.classList.toggle("on", on); b.setAttribute("aria-expanded", String(on));
+  });
+  $("wordList").innerHTML = wordListHtml(LAST_METRICS);
+}
+function wordListHtml(d) {
+  if (!OPEN_WORDS || !d) return "";
+  const rows = d[OPEN_WORDS], label = WORD_LISTS.find(x => x[0] === OPEN_WORDS)[1], total = d.word_counts[OPEN_WORDS].distinct;
+  if (!rows.length) return `<p class="muted small">Not enough calls yet.</p>`;
+  const grp = w => w.group ? ` <span class="small muted">· ${esc(w.group)}</span>` : "";
+  const val = w => OPEN_WORDS === "repeated_in_call" ? w.calls : w.count, maxV = Math.max(1, ...rows.map(val));
+  const head = OPEN_WORDS === "top_phrases" ? "Phrase" : "Word";
+  const cols = OPEN_WORDS === "top_words" ? '<th class="num">Times</th><th class="num">Calls</th>'
+    : OPEN_WORDS === "repeated_in_call" ? '<th class="num">Calls</th>' : '<th class="num">Times</th>';
+  return `<div class="sec-head" style="margin-top:4px"><h3 style="font-size:14px">${label}
+      <span class="small muted" style="font-weight:400">· top ${num(rows.length)} of ${num(total)}</span></h3>
+      <button class="secondary" onclick="openWords(null)">Hide</button></div>
+    <div class="table-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>${head}</th>${cols}</tr></thead><tbody>
+    ${rows.map(w => `<tr><td class="wbar" style="--w:${100 * val(w) / maxV}%"><span>${esc(w.word || w.phrase)}${grp(w)}</span></td>
+      ${OPEN_WORDS === "top_words" ? `<td class="num">${num(w.count)}</td><td class="num">${num(w.calls)}</td>` : `<td class="num">${num(val(w))}</td>`}</tr>`).join("")}
+    </tbody></table></div>`;
+}
 function splitBar(parts, total) {
   const bar = parts.filter(p => p[1]).map(([, n, c]) => `<span style="width:${100 * n / total}%;background:var(${c})"></span>`).join("");
   const legend = parts.map(([l, n, c]) => `<span><i style="background:var(${c})"></i>${l}: <b>${num(n)}</b> (${pctOf(n, total)})</span>`).join("");
@@ -563,9 +596,6 @@ async function loadMetrics() {
   if (!d.calls) { $("metrics").innerHTML = '<p class="muted">No processed calls with a transcript here yet.</p>'; return; }
   const kpi = (l, v, sub, tone) => `<div class="kpi" style="--tone:var(${tone})"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${sub}</div></div>`;
   const c = d.cost, n = d.calls;
-  const grp = w => w.group ? ` <span class="small muted">· ${esc(w.group)}</span>` : "";
-  const maxW = Math.max(1, ...d.top_words.map(w => w.count));
-  const wordTable = (rows, cols) => rows.length ? `<div class="table-wrap"><table><thead><tr>${cols}</tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted small">Not enough calls yet.</p>';
   $("metrics").innerHTML = `<div class="kpis">
       ${kpi("Calls measured", num(n), `${num(d.audio_min, 1)} min of audio · ${num(d.by_sarvam)} by Sarvam`, "--c1")}
       ${kpi("Cost per call", inr(c.avg_inr), `${inr(c.total_inr)} for ${num(c.calls)} calls · Sarvam ${inr(c.stt_inr)}, LLM ${inr(c.llm_inr)}`, "--c2")}
@@ -581,27 +611,14 @@ async function loadMetrics() {
                 ["Neither", d.roles.neither, "--c4"]], n)}
     ${d.groups.length ? `<h3 style="margin:4px 0 6px;font-size:14px">What the calls talk about</h3>
       <div class="badges">${d.groups.map(g => `<span class="badge">${esc(g.group)}: <b>${num(g.count)}</b></span>`).join("")}</div>` : ""}
-    <div class="metrics-grid">
-      <div>
-        <h3>Most used words</h3>
-        ${wordTable(d.top_words.map(w => `<tr><td class="wbar" style="--w:${100 * w.count / maxW}%"><span>${esc(w.word)}${grp(w)}</span></td><td class="num">${num(w.count)}</td><td class="num">${num(w.calls)}</td></tr>`).join(""),
-          '<th>Word</th><th class="num">Times</th><th class="num">Calls</th>')}
-      </div>
-      <div>
-        <h3>Most repeated phrases</h3>
-        ${wordTable(d.top_phrases.map(p => `<tr><td>${esc(p.phrase)}</td><td class="num">${num(p.count)}</td></tr>`).join(""),
-          '<th>Phrase</th><th class="num">Times</th>')}
-        <h3 style="margin-top:14px">Said 3+ times in one call</h3>
-        ${wordTable(d.repeated_in_call.slice(0, 15).map(w => `<tr><td>${esc(w.word)}${grp(w)}</td><td class="num">${num(w.calls)}</td></tr>`).join(""),
-          '<th>Word</th><th class="num">Calls</th>')}
-      </div>
-      <div>
-        <h3>RM's top words</h3>
-        ${wordTable(d.top_words_rm.map(w => `<tr><td>${esc(w.word)}${grp(w)}</td><td class="num">${num(w.count)}</td></tr>`).join(""), '<th>Word</th><th class="num">Times</th>')}
-        <h3 style="margin-top:14px">CSP's top words</h3>
-        ${wordTable(d.top_words_csp.map(w => `<tr><td>${esc(w.word)}${grp(w)}</td><td class="num">${num(w.count)}</td></tr>`).join(""), '<th>Word</th><th class="num">Times</th>')}
-      </div>
-    </div>
+    <h3 style="margin:10px 0 8px;font-size:14px">Words that matter <span class="small muted" style="font-weight:400">· click a card to see its list</span></h3>
+    <div class="kpis word-cards">${WORD_LISTS.map(([k, label, tone]) => {
+      const wc = d.word_counts[k], first = d[k][0];
+      return `<button type="button" class="kpi word-card${OPEN_WORDS === k ? " on" : ""}" style="--tone:var(${tone})" aria-expanded="${OPEN_WORDS === k}"
+        onclick="openWords('${k}')"><div class="label">${label}</div><div class="value">${num(wc.distinct)}</div>
+        <div class="sub">${k === "repeated_in_call" ? `in ${num(wc.uses)} call-word pairs` : `${num(wc.uses)} times`}${first ? ` · top: ${esc(first.word || first.phrase)}` : ""}</div></button>`;
+    }).join("")}</div>
+    <div id="wordList">${wordListHtml(d)}</div>
     ${redoNote(d.sarvam_redo)}
     <p class="small muted">Costs are estimates: Sarvam at ₹${num(c.sarvam_inr_per_hour)} an hour of audio (with speaker separation), LLM by its token prices
       (Groq's free tier counts as ₹0). The word lists keep only words that matter for Eko's work (services, money, banks and IDs,

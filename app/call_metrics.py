@@ -153,6 +153,9 @@ def summary(mode: str = "rm", rm_id: int | None = None, employee_id: int | None 
         word_calls.update(in_call.keys())
         repeats.update(w for w, c in in_call.items() if c >= 3)
 
+    groups = Counter()
+    for w, c in words.items():
+        groups[group(w)] += c
     n = len(per)
     priced = [m for m in per if m["cost_inr"] is not None]
     with_tokens = [m for m in per if m["tokens_recorded"]]
@@ -182,8 +185,16 @@ def summary(mode: str = "rm", rm_id: int | None = None, employee_id: int | None 
         "top_words": word_rows(words),
         "top_phrases": [{"phrase": p, "count": c} for p, c in phrases.most_common(top) if c >= 2],
         "repeated_in_call": [{"word": w, "calls": c, "group": group(w)} for w, c in repeats.most_common(top)],
-        "top_words_rm": [{"word": w, "count": c, "group": group(w)} for w, c in by_role["rm"].most_common(15)],
-        "top_words_csp": [{"word": w, "count": c, "group": group(w)} for w, c in by_role["csp"].most_common(15)],
-        "groups": [{"group": g, "count": c} for g, c in
-                   sum((Counter({group(w): c}) for w, c in words.items()), Counter()).most_common()],
+        "top_words_rm": [{"word": w, "count": c, "group": group(w)} for w, c in by_role["rm"].most_common(top)],
+        "top_words_csp": [{"word": w, "count": c, "group": group(w)} for w, c in by_role["csp"].most_common(top)],
+        # How big each list is in full (the lists above are cut to the top few): distinct entries and total uses
+        "word_counts": {
+            "top_words": {"distinct": len(words), "uses": sum(words.values())},
+            "top_phrases": {"distinct": sum(1 for c in phrases.values() if c >= 2),
+                            "uses": sum(c for c in phrases.values() if c >= 2)},
+            "repeated_in_call": {"distinct": len(repeats), "uses": sum(repeats.values())},
+            "top_words_rm": {"distinct": len(by_role["rm"]), "uses": sum(by_role["rm"].values())},
+            "top_words_csp": {"distinct": len(by_role["csp"]), "uses": sum(by_role["csp"].values())},
+        },
+        "groups": [{"group": g, "count": c} for g, c in groups.most_common()],
     }
