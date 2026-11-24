@@ -164,7 +164,7 @@ CREATE TABLE IF NOT EXISTS recordings (      -- real RM-CSP call recordings from
     is_csp_call INTEGER, language TEXT, transcript_json TEXT, issue_segment INTEGER,
     intent TEXT, intent_confidence REAL, slots_json TEXT, sentiment TEXT, resolution TEXT,
     rm_handling TEXT, summary TEXT, model TEXT,
-    prachi_api_sent_at REAL, prachi_request_id TEXT,
+    prachi_api_sent_at REAL, prachi_request_id TEXT, prachi_status TEXT, prachi_reason TEXT,
     mansi_api_sent_at REAL, mansi_request_id TEXT
 );
 CREATE TABLE IF NOT EXISTS prachi_submissions (  -- DC recordings submitted to Prachi API (Phase 7, app/main.py)
@@ -390,6 +390,13 @@ def conn(retry=True) -> sqlite3.Connection:
             # Simulated calls send no webhook events. Every call so far was a demo or a console test
             _conn.execute("ALTER TABLE calls ADD COLUMN simulated INTEGER DEFAULT 0")
             _conn.execute("UPDATE calls SET simulated=1")
+        for col in ("prachi_status", "prachi_reason"):   # what Prachi's CRM did with the recording
+            if col not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:
+                try:
+                    _conn.execute(f"ALTER TABLE recordings ADD COLUMN {col} TEXT")
+                    _conn.commit()
+                except sqlite3.OperationalError as e:
+                    _raise_unless_duplicate_column(e)
         if "active" not in {r[1] for r in _conn.execute("PRAGMA table_info(allowed_numbers)")}:
             try:
                 _conn.execute("ALTER TABLE allowed_numbers ADD COLUMN active INTEGER DEFAULT 1")

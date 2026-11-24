@@ -106,7 +106,6 @@ def test_review_tokens_are_stored_with_the_recording(monkeypatch, tmp_path):
     monkeypatch.setattr(sarvam, "transcribe", lambda path: lines)
     monkeypatch.setattr(llm_engine, "provider", lambda: "groq")
     monkeypatch.setattr(recordings, "_write_summary", lambda rid: None)
-    monkeypatch.setattr(recordings, "send_to_prachi_api", lambda rec: True)
 
     def ask(system, user, tool):
         llm_engine.record_usage("openai/gpt-oss-120b", 700, 90)
@@ -139,7 +138,6 @@ def _backfill_env(monkeypatch, tmp_path, transcribe):
 
     def no_handoff(*a):
         raise AssertionError("an old recording redone must not be sent again")
-    monkeypatch.setattr(recordings, "send_to_prachi_api", no_handoff)
     monkeypatch.setattr(recordings.integrations, "recording_processed", no_handoff)
 
 

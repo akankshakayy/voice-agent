@@ -74,6 +74,7 @@ async def lifespan(_app):
     threading.Thread(target=autogmap.sync_loop, args=(stop,), daemon=True, name="autogmap-sync").start()
     threading.Thread(target=autogmap.upload_queue_worker, args=(stop,), daemon=True, name="autogmap-upload-worker").start()
     threading.Thread(target=prachi_sync.sync_loop, args=(stop,), daemon=True, name="prachi-sync").start()
+    threading.Thread(target=recordings.prachi_loop, args=(stop,), daemon=True, name="prachi-handoff").start()
     yield
     stop.set()
     integrations.wake()
@@ -115,7 +116,7 @@ PUBLIC_PATHS = {"/login", "/signup", "/forgot", "/reset", "/verify-email", "/fav
                  "/status", "/healthz", "/health", "/api/health", "/ping",  # Health check endpoints - no auth required
                 "/api/auth/signup", "/api/auth/forgot", "/api/auth/reset", "/api/auth/verify", "/api/auth/options",
                 "/api/auth/verify/send", "/api/auth/google/start", "/api/auth/google/callback", "/healthz"}
-PUBLIC_PREFIXES = ("/static/",)  # All admin APIs require auth via @allow("admin") decorator
+PUBLIC_PREFIXES = ("/static/", "/api/prachi/recordings/")   # Prachi's audio links carry their own signature  # All admin APIs require auth via @allow("admin") decorator
 DEVICE_PATHS = {"/api/uploader/ping", "/api/uploader/recordings", "/api/uploader/consent"}   # the uploader app: upload token, not a login
 STAFF = ("admin", "ops")                       # full access to calls, dashboards and metrics
 PAGE_ROLES = {"/": ("admin", "ops", "rm"), "/call": STAFF, "/ops": STAFF, "/harness": STAFF, "/rm": ("admin", "ops", "rm"),
@@ -1944,6 +1945,37 @@ def recording_audio(rec_id: int, request: Request):
     if not os.path.exists(path):
         raise HTTPException(404, "The audio file is missing")
     return FileResponse(path)
+
+
+@app.get("/api/prachi/recordings/{rec_id}/audio")
+def prachi_recording_audio(rec_id: int, exp: int = 0, sig: str = ""):
+    """Prachi's CRM downloads an RM/DC recording with the signed link it was sent (valid for an hour)."""
+    if not recordings.prachi_audio_ok(rec_id, exp, sig):
+        raise HTTPException(403, "This link is wrong or has expired")
+    row = db.q("SELECT file_path, mode FROM recordings WHERE id=?", (rec_id,), one=True)
+    if not row or row["mode"] not in ("rm", "dc"):
+        raise HTTPException(404, "Recording not found")
+    path = recordings.audio_file(row)
+    if not os.path.exists(path):
+        raise HTTPException(404, "The audio file is missing")
+    return FileResponse(path)
+
+
+@app.post("/api/prachi/test-send/{rec_id}", dependencies=[Depends(allow("admin"))])
+def prachi_test_send(rec_id: int):
+    """Send one recording to Prachi's live webhook with id test_<id>, and show her reply. Changes nothing here."""
+    row = db.q("SELECT * FROM recordings WHERE id=?", (rec_id,), one=True)
+    if not row or row["mode"] not in ("rm", "dc"):
+        raise HTTPException(404, "No RM or DC recording with that id")
+    rec = recordings.prachi_record(row, test=True)
+    if not rec:
+        raise HTTPException(400, "We have no phone number for this recording's RM/DC")
+    resp = recordings.post_to_prachi([rec])
+    try:
+        body = resp.json()
+    except ValueError:
+        body = resp.text[:1000]
+    return {"sent": {**rec, "audio_url": rec["audio_url"].split("?")[0] + "?…"}, "status_code": resp.status_code, "reply": body}
 
 
 @app.get("/api/autogmap/recordings/{rec_id}/audio")
