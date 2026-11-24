@@ -196,7 +196,7 @@ def validate_dc_consent(dc_id: int, consent_token: str) -> bool:
 
 # ---------------------------------------------------------------- hand-off to Prachi's CRM
 # Every new RM and DC recording goes to Prachi's webhook as soon as it is uploaded (details only, no transcript).
-# The feed is off until PRACHI_SEND_FROM (e.g. 2026-11-25) is set; nothing uploaded before that date is sent.
+# The feed is off until PRACHI_SEND_FROM is a date (e.g. 2026-11-25; "off" keeps it off); nothing uploaded before it is sent.
 PRACHI_URL = os.environ.get("PRACHI_RECORDINGS_URL",
                             "https://indev.eko.in/sbi-relationship-crm/api/v1/webhooks/recordings")
 PRACHI_BATCH = 50
@@ -212,7 +212,7 @@ def _prachi_secret() -> str:
 
 def prachi_send_from() -> float | None:
     raw = os.environ.get("PRACHI_SEND_FROM", "").strip()
-    if not raw:
+    if raw.lower() in ("", "off"):
         return None
     dt = datetime.fromisoformat(raw)
     return (dt if dt.tzinfo else dt.replace(tzinfo=TZ)).timestamp()

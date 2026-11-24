@@ -53,6 +53,8 @@ class TestPrachiHandoff:
         monkeypatch.setenv("PRACHI_RECORDING_SECRET", "s3cret")
         _rec()
         assert "off" in recordings.send_to_prachi(now=1795600100)
+        monkeypatch.setenv("PRACHI_SEND_FROM", "off")
+        assert "off" in recordings.send_to_prachi(now=1795600100)
 
     def test_rm_and_dc_records_and_per_record_results(self, monkeypatch):
         from app import db, recordings

@@ -11,7 +11,7 @@ Code: `app/recordings.py` (`send_to_prachi`, `prachi_loop`), audio route and tes
 | Setting (eko-deploy secret) | Meaning |
 |---|---|
 | `PRACHI_RECORDING_SECRET` | Shared secret, sent as the `X-Recording-Secret` header. Also signs the audio links. |
-| `PRACHI_SEND_FROM` | Switch-on date, e.g. `2026-11-25` (Indian time). **Unset = feed off.** Only recordings uploaded on or after it are sent. |
+| `PRACHI_SEND_FROM` | Switch-on date, e.g. `2026-11-25` (Indian time). **`off` = feed off** (eko-deploy needs every listed secret to have a value). Only recordings uploaded on or after it are sent. |
 | `APP_BASE_URL` | Our public address, used to build the full audio link. |
 
 ```
