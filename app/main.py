@@ -1414,9 +1414,9 @@ def delete_dc(dc_id: int):
 # ------------------------------------------------------------------ Allowed Numbers Management
 @app.get("/api/allowed-numbers", dependencies=[Depends(allow("admin"))])
 def list_allowed_numbers(dc_id: int | None = None):
-    """List allowed phone numbers. Optionally filter by DC."""
+    """List allowed phone numbers. Filtering by DC also includes the shared rows (dc_id NULL)."""
     if dc_id:
-        return db.q("SELECT id, dc_id, phone_number, description, added_at FROM allowed_numbers WHERE dc_id=? ORDER BY phone_number",
+        return db.q("SELECT id, dc_id, phone_number, description, added_at FROM allowed_numbers WHERE dc_id=? OR dc_id IS NULL ORDER BY phone_number",
                    (dc_id,))
     return db.q("SELECT id, dc_id, phone_number, description, added_at FROM allowed_numbers ORDER BY dc_id, phone_number")
 

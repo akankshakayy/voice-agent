@@ -156,23 +156,24 @@ def uploader_rm(device: dict, chosen: int | None) -> int:
 
 
 def get_allowed_numbers(dc_id: int) -> list[str]:
-    """Get list of allowed phone numbers for a DC."""
-    rows = db.q("SELECT DISTINCT phone_number FROM allowed_numbers WHERE dc_id=? ORDER BY phone_number", (dc_id,))
-    return [r["phone_number"] for r in rows]
+    """Allowed numbers for a DC as 10-digit numbers: its own rows plus the shared rows (dc_id NULL)."""
+    rows = db.q("""SELECT phone_number FROM allowed_numbers
+                   WHERE (dc_id=? OR dc_id IS NULL) AND COALESCE(active, 1)=1""", (dc_id,))
+    return sorted({t for t in (_phone_tail(r["phone_number"]) for r in rows) if t})
 
 
 def _phone_tail(number: str | None) -> str:
     """Last 10 digits: '+91 98765 43210', '09876543210' and '9876543210' are the same number."""
-    return "".join(ch for ch in (number or "") if ch.isdigit())[-10:]
+    number = re.sub(r"\.0+$", "", (number or "").strip())  # Excel imports store '9876543210.0'
+    return "".join(ch for ch in number if ch.isdigit())[-10:]
 
 
 def is_allowed_number(dc_id: int, phone_number: str) -> bool:
-    """Check if a phone number is in the DC's allowed list."""
+    """Check if a phone number is in the DC's allowed list (its own rows or the shared ones)."""
     tail = _phone_tail(phone_number)
     if not tail:
         return False
-    rows = db.q("SELECT phone_number FROM allowed_numbers WHERE dc_id=? AND COALESCE(active, 1)=1", (dc_id,))
-    return any(_phone_tail(r["phone_number"]) == tail for r in rows)
+    return any(_phone_tail(n) == tail for n in get_allowed_numbers(dc_id))
 
 
 def give_dc_consent(dc_id: int) -> str:

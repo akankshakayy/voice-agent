@@ -390,6 +390,12 @@ def conn(retry=True) -> sqlite3.Connection:
             # Simulated calls send no webhook events. Every call so far was a demo or a console test
             _conn.execute("ALTER TABLE calls ADD COLUMN simulated INTEGER DEFAULT 0")
             _conn.execute("UPDATE calls SET simulated=1")
+        if "active" not in {r[1] for r in _conn.execute("PRAGMA table_info(allowed_numbers)")}:
+            try:
+                _conn.execute("ALTER TABLE allowed_numbers ADD COLUMN active INTEGER DEFAULT 1")
+                _conn.commit()
+            except sqlite3.OperationalError as e:
+                _raise_unless_duplicate_column(e)
         # Phase 4+ migrations: mode, dc_id, employee_id for mode-aware recordings
         for col, dtype in [("mode", "TEXT DEFAULT 'rm'"), ("dc_id", "INTEGER"), ("employee_id", "INTEGER")]:
             if col not in {r[1] for r in _conn.execute("PRAGMA table_info(recordings)")}:

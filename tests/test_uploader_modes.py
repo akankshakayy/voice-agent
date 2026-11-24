@@ -132,3 +132,19 @@ def test_allowed_number_matching_ignores_prefixes():
         assert recordings.is_allowed_number(dc_id, n), n
     assert not recordings.is_allowed_number(dc_id, "9876543211")
     assert not recordings.is_allowed_number(dc_id, "")
+
+
+def test_shared_numbers_apply_to_every_dc_and_excel_floats_match():
+    from app import db, recordings
+    dc_id, tok = _dc(allowed=())
+    db.x("INSERT INTO allowed_numbers(phone_number, added_by, added_at) VALUES(?,?,?)",
+         ("6200284549.0", "prachi_sync", time.time()))
+    other_dc = db.x("INSERT INTO dcs(name, phone, created_at) VALUES(?,?,?)", ("Other DC", "9000022222", time.time()))
+    db.x("INSERT INTO allowed_numbers(dc_id, phone_number, added_at) VALUES(?,?,?)", (other_dc, "9111111111", time.time()))
+    for d in (dc_id, other_dc):
+        assert recordings.is_allowed_number(d, "+91 62002 84549"), d
+    assert not recordings.is_allowed_number(dc_id, "9111111111")
+    p = _phone().get("/api/uploader/ping", headers={"Authorization": f"Bearer {tok}"}).json()
+    assert p["allowed_numbers"] == ["6200284549"]
+    db.x("UPDATE allowed_numbers SET active=0 WHERE phone_number='6200284549.0'")
+    assert not recordings.is_allowed_number(dc_id, "6200284549")
