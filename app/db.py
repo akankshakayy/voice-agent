@@ -419,6 +419,7 @@ def conn(retry=True) -> sqlite3.Connection:
                              WHEN rm_id IS NOT NULL THEN 'rm' ELSE 'ops' END""")
             _conn.commit()
         _add_columns(_conn, "rms", {"email": "TEXT", "source": "TEXT"}, demo_source=True)
+        _add_columns(_conn, "rms", {"voiceprint_json": "TEXT", "voiceprint_at": "REAL", "voiceprint_by": "TEXT"})
         _add_columns(_conn, "csps", {"shared_phone": "TEXT", "alt_phone": "TEXT", "email": "TEXT", "category": "TEXT",
                                      "state": "TEXT", "lho": "TEXT", "population": "TEXT", "terminal_status": "TEXT",
                                      "active": "INTEGER DEFAULT 1", "source": "TEXT", "import_id": "INTEGER",

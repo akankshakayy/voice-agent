@@ -538,6 +538,7 @@
                 <div class="nav-item" data-page="employees">👥 Employees</div>
                 <div class="nav-item" data-page="allowed-numbers">📞 Allowed Numbers</div>
                 <div class="nav-item" data-page="applicant-numbers">📱 Applicant Numbers</div>
+                <div class="nav-item" data-page="voice-samples">🎙️ RM Voice Samples</div>
             </div>
         </div>
 
@@ -627,6 +628,19 @@
                         </div>
                     </div>
                     <div class="pagination" id="applicantsPagination"></div>
+                </div>
+
+                <!-- RM Voice Samples Page -->
+                <div class="page" id="voice-samples-page">
+                    <div style="background: #DBEAFE; border: 1px solid #93C5FD; border-radius: 6px; padding: 15px; color: #1E40AF; font-size: 14px; margin-bottom: 20px; line-height: 1.5;">
+                        Upload 30-60 seconds of the RM talking alone (any audio file, e.g. a WhatsApp voice note). The server keeps
+                        only a voiceprint (a list of numbers describing the voice) and deletes the audio. On the RM's recorded calls,
+                        the voice that matches is labelled RM; if neither voice clearly matches, the AI's guess is used.
+                    </div>
+                    <input type="file" id="voiceSampleFile" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.ogg,.opus,.amr,.aac" style="display:none" onchange="uploadVoiceSample(this)">
+                    <div class="table-container" id="voiceSamplesTableContainer">
+                        <div class="loading"><div class="spinner"></div>Loading RMs...</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -845,8 +859,10 @@
                 dcs: 'District Coordinators',
                 employees: 'Employees',
                 'allowed-numbers': 'Allowed Numbers',
-                'applicant-numbers': 'Applicant Numbers'
+                'applicant-numbers': 'Applicant Numbers',
+                'voice-samples': 'RM Voice Samples'
             };
+            document.getElementById('addBtn').style.display = page === 'voice-samples' ? 'none' : '';
             document.getElementById('pageTitle').textContent = titles[page];
 
             // Clear form for new page
@@ -857,6 +873,68 @@
             else if (page === 'employees') loadEmployees();
             else if (page === 'allowed-numbers') loadAllowedNumbers();
             else if (page === 'applicant-numbers') loadApplicantNumbers();
+            else if (page === 'voice-samples') loadVoiceSamples();
+        }
+
+        const escVP = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+        let voiceSampleRm = null;
+
+        async function loadVoiceSamples() {
+            const box = document.getElementById('voiceSamplesTableContainer');
+            try {
+                const response = await fetch(`${API_BASE}/api/voiceprints`, { credentials: "include" });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const rms = (await response.json()).filter(r => r.source !== 'demo');
+                if (!rms.length) {
+                    box.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p>No RMs found</p></div>';
+                    return;
+                }
+                box.innerHTML = `<table><thead><tr><th>RM</th><th>Phone</th><th>Voiceprint</th><th>Saved</th><th>Actions</th></tr></thead><tbody>
+                    ${rms.map(r => `<tr>
+                        <td>${escVP(r.name)}</td>
+                        <td>${escVP(r.phone || '-')}</td>
+                        <td><span class="status-badge status-${r.has_voiceprint ? 'active' : 'inactive'}">${r.has_voiceprint ? `Saved (${Math.round(r.seconds)} s sample)` : 'None'}</span></td>
+                        <td>${r.at ? escVP(new Date(r.at * 1000).toLocaleString('en-IN')) + (r.by ? ' by ' + escVP(r.by) : '') : '-'}</td>
+                        <td><div class="actions">
+                            <button class="btn-sm btn-edit" onclick="pickVoiceSample(${r.id})">${r.has_voiceprint ? 'Replace' : 'Upload'} sample</button>
+                            ${r.has_voiceprint ? `<button class="btn-sm btn-delete" onclick="deleteVoiceprint(${r.id})">Delete</button>` : ''}
+                        </div></td>
+                    </tr>`).join('')}</tbody></table>`;
+            } catch (err) {
+                showAlert(`Failed to load RMs: ${err.message}`, 'error');
+                box.innerHTML = '<div class="empty-state"><div class="empty-state-icon">⚠️</div><p>Failed to load data</p></div>';
+            }
+        }
+
+        function pickVoiceSample(rmId) {
+            voiceSampleRm = rmId;
+            const input = document.getElementById('voiceSampleFile');
+            input.value = '';
+            input.click();
+        }
+
+        async function uploadVoiceSample(input) {
+            const file = input.files[0];
+            if (!file || !voiceSampleRm) return;
+            const body = new FormData();
+            body.append('file', file);
+            showAlert('Making the voiceprint... (the first one can take a minute while the model downloads)', 'info');
+            try {
+                const response = await fetch(`${API_BASE}/api/rms/${voiceSampleRm}/voice-sample`, { method: 'POST', body, credentials: "include" });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+                showAlert(data.note || `Voiceprint saved (${Math.round(data.seconds)} s sample)`, data.note ? 'info' : 'success');
+                loadVoiceSamples();
+            } catch (err) {
+                showAlert(`Upload failed: ${err.message}`, 'error');
+            }
+        }
+
+        async function deleteVoiceprint(rmId) {
+            if (!confirm("Delete this RM's voiceprint? Their calls will go back to the AI's guess.")) return;
+            const response = await fetch(`${API_BASE}/api/rms/${rmId}/voiceprint`, { method: 'DELETE', credentials: "include" });
+            if (response.ok) { showAlert('Voiceprint deleted', 'success'); loadVoiceSamples(); }
+            else showAlert(`Delete failed: HTTP ${response.status}`, 'error');
         }
 
         // API Calls

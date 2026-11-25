@@ -37,7 +37,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import call_metrics, db, integrations, llm_engine, misheard, report, sarvam, stt, telemetry
+from . import call_metrics, db, integrations, llm_engine, misheard, report, sarvam, stt, telemetry, voiceprint
 from .taxonomy import CATEGORIES, SLOT_LABELS
 
 log = logging.getLogger("eko.recordings")
@@ -800,7 +800,7 @@ Then classify the call into one issue type:
 Use the call_review tool. Write summary and rm_handling in English."""
 
 
-def _review_input(segs: list[dict]) -> str:
+def _review_input(segs: list[dict], rm_voice: str | None = None) -> str:
     lines, size = [], 0
     for i, s in enumerate(segs):
         voice = f" (voice {s['voice']})" if s.get("voice") else ""
@@ -810,7 +810,9 @@ def _review_input(segs: list[dict]) -> str:
             break
         lines.append(line)
         size += len(line) + 1
-    return f"Transcript ({len(segs)} lines):\n" + "\n".join(lines)
+    known = (f"Voice {rm_voice} is the RM: it matches the RM's recorded voice sample. Every other voice is not the RM.\n"
+             if rm_voice else "")
+    return known + f"Transcript ({len(segs)} lines):\n" + "\n".join(lines)
 
 
 def _ask(system: str, user: str, tool: dict) -> tuple[dict, str]:
@@ -858,12 +860,18 @@ def _ask(system: str, user: str, tool: dict) -> tuple[dict, str]:
     raise ValueError("No model returned a call_review")
 
 
-def review_call(segs: list[dict]) -> tuple[dict, str]:
+def review_call(segs: list[dict], rm_voice: str | None = None) -> tuple[dict, str]:
+    """rm_voice: the voice the RM's voiceprint picked. It overrides the AI's guess of which voice is the RM."""
     hint = misheard.hint()
-    out, model = _ask(_review_prompt() + (f"\n\n{hint}" if hint else ""), _review_input(segs), REVIEW_TOOL)
+    out, model = _ask(_review_prompt() + (f"\n\n{hint}" if hint else ""), _review_input(segs, rm_voice), REVIEW_TOOL)
     speakers = [s if s in SPEAKERS else "unknown" for s in (out.get("speakers") or [])]
     speakers = (speakers + ["unknown"] * len(segs))[:len(segs)]
     roles = {v: r for v, r in (out.get("voice_roles") or {}).items() if r in SPEAKERS}
+    if rm_voice:
+        out["ai_voice_roles"] = dict(roles)
+        roles = {v: ("csp" if r == "rm" else r) for v, r in roles.items()}
+        roles[rm_voice] = "rm"
+        out["voice_roles"] = roles
     # Voices come from the sound, so one voice is one person: its role decides every line it speaks
     out["speakers"] = [roles.get(s.get("voice"), sp) for s, sp in zip(segs, speakers)]
     out["slots"] = {k: llm_engine.normalize_id(v) if k in llm_engine.ID_SLOTS else str(v).strip()
@@ -926,6 +934,32 @@ def _transcribe(r: dict, path: str) -> dict:
              "transcribe_s": round(time.perf_counter() - t0, 1), "transcribe_at": time.time()}
     db.update("recordings", r["id"], stt_json=cache)
     return cache
+
+
+def _voiceprint(r: dict, path: str, cache: dict) -> dict | None:
+    """Which voice is the RM, from the RM's voiceprint; kept in stt_json so "Process again" reuses it. A failure
+    here never fails the recording: the AI's guess is used instead."""
+    if r.get("mode", "rm") != "rm" or not voiceprint.get(r.get("rm_id")):
+        return None
+    vp = cache.get("voiceprint")
+    if vp and vp.get("model") == voiceprint.MODEL_FILE and vp.get("min_margin") == voiceprint.MIN_MARGIN \
+            and vp.get("rm_id") == r.get("rm_id") and (vp.get("at") or 0) >= (_voiceprint_saved_at(r["rm_id"]) or 0):
+        return vp
+    try:
+        vp = voiceprint.match(path, cache.get("lines") or [], r["rm_id"])
+    except Exception:
+        log.exception("Voiceprint match failed for recording %d", r["id"])
+        return None
+    if vp:
+        vp.update(rm_id=r["rm_id"], at=time.time())
+        cache["voiceprint"] = vp
+        db.update("recordings", r["id"], stt_json=cache)
+    return vp
+
+
+def _voiceprint_saved_at(rm_id: int) -> float | None:
+    row = db.q("SELECT voiceprint_at FROM rms WHERE id=?", (rm_id,), one=True)
+    return row and row.get("voiceprint_at")
 
 
 def stt_confidence(cache: dict) -> float | None:
@@ -997,13 +1031,21 @@ def process_one(r: dict, backfill: bool = False):
                   summary="No speech in the recording")
         integrations.recording_processed(r["id"])
         return
+    vp = _voiceprint(r, path, cache) if corrected is None else None
+    rm_voice = (vp or {}).get("rm_voice")
     t3 = time.perf_counter()
     with llm_engine.count_usage() as review_usage:
-        review, model = review_call(segs) if llm_engine.provider() else ({}, None)
+        review, model = ((review_call(segs, rm_voice) if rm_voice else review_call(segs)) if llm_engine.provider()
+                         else ({}, None))
     review_s = time.perf_counter() - t3
     speakers = ([s.get("speaker") or "unknown" for s in corrected] if corrected is not None
                 else review.get("speakers") or ["unknown"] * len(segs))
-    db.update("recordings", r["id"], **fields, timing_json=timing(review_s), review_usage_json=review_usage,
+    t = timing(review_s)
+    if vp:
+        ai_rm = [v for v, role in (review.get("ai_voice_roles") or review.get("voice_roles") or {}).items() if role == "rm"]
+        t["voiceprint"] = {"rm_voice": rm_voice, "margin": vp.get("margin"), "scores": vp.get("scores"),
+                           "ai_agreed": (ai_rm == [rm_voice]) if rm_voice and review else None}
+    db.update("recordings", r["id"], **fields, timing_json=t, review_usage_json=review_usage,
               transcript_json=[{**s, "speaker": sp} for s, sp in zip(segs, speakers)],
               is_csp_call=None if not review else int(bool(review.get("is_csp_call"))),
               language=review.get("language"), issue_segment=review.get("issue_segment"),

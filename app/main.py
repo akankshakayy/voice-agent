@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import agent, auth, autogmap, bootstrap, bulk_load, call_metrics, db, google_auth, integrations, mailer, metrics, misheard, prachi_sync, recordings, report, stt, telemetry, tts  # noqa: E402
+from . import agent, auth, autogmap, bootstrap, bulk_load, call_metrics, db, google_auth, integrations, mailer, metrics, misheard, prachi_sync, recordings, report, stt, telemetry, tts, voiceprint  # noqa: E402
 from .logging_config import setup_logging  # noqa: E402
 from .seed import seed_if_demo  # noqa: E402
 from .taxonomy import CATEGORIES, SLOT_LABELS, STT_CONFIDENCE_MIN, INTENT_CONFIDENCE_MIN, MAX_MISUNDERSTOOD  # noqa
@@ -667,6 +667,42 @@ def config():
 @app.get("/api/rms", dependencies=[Depends(allow("admin", "ops", "rm"))])
 def rms():
     return db.q("SELECT * FROM rms ORDER BY id")
+
+
+@app.get("/api/voiceprints", dependencies=[Depends(allow("admin"))])
+def voiceprints():
+    return voiceprint.status()
+
+
+@app.post("/api/rms/{rm_id}/voice-sample")
+def upload_voice_sample(rm_id: int, file: UploadFile = File(...), actor=Depends(allow("admin"))):
+    """An RM's voice sample -> their voiceprint. Only the voiceprint is kept; the audio is deleted straight away."""
+    import tempfile
+    if not db.q("SELECT id FROM rms WHERE id=?", (rm_id,), one=True):
+        raise HTTPException(404, "RM not found")
+    content = file.file.read(20 * 1024 * 1024 + 1)
+    if not content:
+        raise HTTPException(400, "The file is empty")
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(413, "File too large (max 20 MB)")
+    with tempfile.NamedTemporaryFile(suffix=os.path.splitext(file.filename or "")[1][:10]) as tmp:
+        tmp.write(content)
+        tmp.flush()
+        try:
+            vp = voiceprint.from_sample(tmp.name)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    voiceprint.save(rm_id, vp, actor.get("email"))
+    log.info("Voiceprint saved for RM %d (%.0f s sample) by %s", rm_id, vp["seconds"], actor.get("email"))
+    note = None if vp["seconds"] >= voiceprint.GOOD_SAMPLE_S else \
+        f"Saved, but {vp['seconds']:.0f} seconds is short: a sample of {voiceprint.GOOD_SAMPLE_S}-60 seconds is more reliable"
+    return {"ok": True, "seconds": vp["seconds"], "note": note}
+
+
+@app.delete("/api/rms/{rm_id}/voiceprint", dependencies=[Depends(allow("admin"))])
+def delete_voiceprint(rm_id: int):
+    voiceprint.remove(rm_id)
+    return {"ok": True}
 
 
 @app.get("/api/csps", dependencies=[Depends(allow(*STAFF))])
